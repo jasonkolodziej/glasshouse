@@ -41,6 +41,16 @@ struct GlasshouseCommands: Commands {
             Button("Open Host…") { workspace?.showsPalette = true }      // was ⌘K in the spec; ⌘K = clear
                 .keyboardShortcut("o", modifiers: [.command, .shift])
         }
+        // Replaces the default ⌘W Close (Glasshouse saves no documents). Terminal.app table:
+        // ⌘W closes the tab (and the window with its last tab), ⇧⌘W closes the window.
+        CommandGroup(replacing: .saveItem) {
+            Button("Close Tab") {
+                if let workspace { workspace.closeSelected() } else { NSApp.keyWindow?.performClose(nil) } // e.g. Settings
+            }
+            .keyboardShortcut("w")
+            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+        }
         CommandMenu("Shell") {
             Button("Command Palette…") { workspace?.showsPalette = true }
                 .keyboardShortcut("p", modifiers: [.command, .shift])

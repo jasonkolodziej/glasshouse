@@ -46,14 +46,25 @@ final class Workspace {
             "read _ && /bin/bash \(q); rm -f \(q)\n")
     }
 
+    /// Closing the selected tab selects its right-hand neighbour (else the left), like Safari and Terminal.app.
+    /// Closing the last tab leaves `sessions` empty; WorkspaceView then closes the window.
     func close(_ session: TerminalSession) {
+        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         session.close()
-        sessions.removeAll { $0.id == session.id }
-        if selectedID == session.id { selectedID = sessions.last?.id }
+        sessions.remove(at: index)
+        if selectedID == session.id {
+            selectedID = sessions.isEmpty ? nil : sessions[min(index, sessions.count - 1)].id
+        }
+    }
+
+    func closeSelected() {
+        if let selected { close(selected) }
     }
 
     private func add(_ s: TerminalSession) {
         s.onCommandFinished = { [weak self] session, record in self?.notifyFinished(session, record) }
+        // Terminal.app default: close the tab when the shell exits cleanly; keep it to show a failure.
+        s.onExited = { [weak self] session, code in if code == 0 { self?.close(session) } }
         s.onApprovalWhileHidden = { session, ctx in Notifier.approvalWaiting(tab: session.title, ctx: ctx) }
         sessions.append(s)
         selectedID = s.id

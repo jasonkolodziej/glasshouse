@@ -19,6 +19,7 @@ struct SessionSidebar: View {
                         }
                     }
                     .tag(s.id)
+                    .contextMenu { Button("Close Tab") { workspace.close(s) } }
                 }
             }
             Section("Hosts") {

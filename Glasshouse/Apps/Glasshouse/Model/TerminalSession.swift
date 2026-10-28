@@ -45,6 +45,7 @@ final class TerminalSession: Identifiable {
 
     var onCommandFinished: ((TerminalSession, CommandRecord) -> Void)?
     var onApprovalWhileHidden: ((TerminalSession, ApprovalContext) -> Void)?
+    var onExited: ((TerminalSession, Int32?) -> Void)?
 
     @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private var lastForeground: ProcessSnapshot?
@@ -102,10 +103,11 @@ final class TerminalSession: Identifiable {
             refreshGeometry()
         case .bell:
             NSSound.beep()
-        case .exited:
+        case .exited(let code):
             exited = true
             stopPolling()
             setTrust(.idle, approval: nil)
+            onExited?(self, code)
         }
     }
 
@@ -210,7 +212,11 @@ final class TerminalSession: Identifiable {
 
     func clearScrollback() { engine.send(text: "\u{0C}") } // TODO: engine-level scrollback clear (⌘K)
 
-    func close() { engine.terminate(); stopPolling(); SecureKeyboardEntry.shared.update(secretPromptFocused: false) }
+    func close() {
+        if !exited { engine.terminate() } // an exited shell's PID may already belong to another process
+        stopPolling()
+        SecureKeyboardEntry.shared.update(secretPromptFocused: false)
+    }
 
     // MARK: Helpers
 
