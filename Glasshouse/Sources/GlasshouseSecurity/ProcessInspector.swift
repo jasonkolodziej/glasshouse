@@ -58,9 +58,9 @@ public enum ProcessInspector {
     }
 
     static func executablePath(pid: pid_t) -> String? {
-        var buf = [CChar](repeating: 0, count: 4096) // PROC_PIDPATHINFO_MAXSIZE
-        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
-        return n > 0 ? String(cString: buf) : nil
+        var buf = [UInt8](repeating: 0, count: 4096) // PROC_PIDPATHINFO_MAXSIZE
+        let n = proc_pidpath(pid, &buf, UInt32(buf.count)) // returns the path length, excluding the NUL
+        return n > 0 ? String(decoding: buf.prefix(Int(n)), as: UTF8.self) : nil
     }
 
     /// argv via sysctl KERN_PROCARGS2: [argc:int32][exec_path\0][padding \0…][argv0\0argv1\0…][env…]
