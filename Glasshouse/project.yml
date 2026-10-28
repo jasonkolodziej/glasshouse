@@ -1,0 +1,107 @@
+# XcodeGen spec: `brew install xcodegen && xcodegen generate` produces Glasshouse.xcodeproj.
+#
+# Bundle layout:
+#   Glasshouse.app/
+#     Contents/MacOS/Glasshouse
+#     Contents/Library/LoginItems/GlasshouseAgent.app   (LSUIElement; registered via SMAppService.loginItem)
+#
+# The agent is an .app (not a bare tool) because the data-protection keychain needs the restricted
+# keychain-access-groups entitlement, which must be authorised by a provisioning profile — and only
+# app-like bundles can embed one (TN3137; error -34018 otherwise).
+name: Glasshouse
+options:
+  bundleIdPrefix: dev.glasshouse
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: YES
+    DEVELOPMENT_TEAM: "" # REQUIRED: your Team ID (keychain access group + Secure Enclave)
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  GlasshouseKit:
+    path: .
+targets:
+  Glasshouse:
+    type: application
+    platform: macOS
+    sources:
+      - Apps/Glasshouse
+    dependencies:
+      - package: GlasshouseKit
+        product: TerminalCore
+      - package: GlasshouseKit
+        product: ShellIntegration
+      - package: GlasshouseKit
+        product: GlasshouseSecurity
+      - package: GlasshouseKit
+        product: SSHAgentCore
+      - package: GlasshouseKit
+        product: DesignSystem
+      - target: GlasshouseAgent
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+    info:
+      path: Apps/Glasshouse/Info.plist
+      properties:
+        CFBundleDisplayName: Glasshouse
+        LSApplicationCategoryType: public.app-category.developer-tools
+        GHKeychainAccessGroup: $(AppIdentifierPrefix)dev.glasshouse.shared
+    entitlements:
+      path: Apps/Glasshouse/Glasshouse.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)dev.glasshouse.shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.glasshouse.app
+        # Terminals cannot be sandboxed: child shells inherit the sandbox.
+        # Ship outside the Mac App Store: Developer ID + hardened runtime + notarization.
+        ENABLE_APP_SANDBOX: NO
+
+  GlasshouseAgent:
+    type: application
+    platform: macOS
+    sources:
+      - Apps/GlasshouseAgent
+    dependencies:
+      - package: GlasshouseKit
+        product: SSHAgentCore
+    info:
+      path: Apps/GlasshouseAgent/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: Glasshouse Agent
+        GHKeychainAccessGroup: $(AppIdentifierPrefix)dev.glasshouse.shared
+    entitlements:
+      path: Apps/GlasshouseAgent/GlasshouseAgent.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)dev.glasshouse.shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.glasshouse.agent
+        # v1: unsandboxed so it can read the peer's argv (sysctl KERN_PROCARGS2) for the prompt.
+        # Hardening option: sandbox the agent and move argv lookup into a non-sandboxed XPC service.
+        ENABLE_APP_SANDBOX: NO
+        SKIP_INSTALL: YES
+
+schemes:
+  Glasshouse:
+    build:
+      targets:
+        Glasshouse: all
+        GlasshouseAgent: all
+    test:
+      targets:
+        - package: GlasshouseKit/SSHAgentCoreTests
+        - package: GlasshouseKit/ShellIntegrationTests
+        - package: GlasshouseKit/DesignSystemTests

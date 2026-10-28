@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "path": ".",
+    },
+    {
+      "path": "./Glasshouse",
+    },
+    {
+      "path": "./docs",
+    },
+  ],
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [],
+  },
+}
