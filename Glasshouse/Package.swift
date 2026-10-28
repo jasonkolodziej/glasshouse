@@ -15,15 +15,20 @@ let package = Package(
         .library(name: "DesignSystem", targets: ["DesignSystem"]),
     ],
     traits: [
-        // Default build targets SwiftTerm 1.99.1+ (the 2.0 preview API). Enable this trait only if you
-        // pin SwiftTerm to 1.20.x (e.g. in Package.resolved) — it switches the adapter to the old API.
+        // Default build targets SwiftTerm 1.99.1 (the 2.0 preview API). Enable this trait only if you
+        // switch the dependency below to upstream 1.20.x — it switches the adapter to the old API.
         .trait(name: "SwiftTerm1", description: "Build the engine adapter against SwiftTerm 1.20.x"),
     ],
     dependencies: [
-        // Both API generations are supported (see SwiftTermEngine.swift). SwiftPM resolves the newest
-        // in range → 1.99.1+ unless you pin. 1.99.0 is NOT supported (no terminalContentSnapshot);
-        // 2.0.0 final is excluded until it has been checked against the adapter.
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", "1.20.0"..<"2.0.0"),
+        // SwiftTerm 1.99.1 plus one fix: LocalProcess teardown runs at the IO workers' QoS, so closing
+        // a tab no longer makes the parse thread wait on a utility-QoS thread (priority inversion at
+        // TerminalIOPipeline.swift:496). Filed upstream as migueldeicaza/SwiftTerm fix/teardown-qos;
+        // once a release carries it, go back to
+        //   .package(url: "https://github.com/migueldeicaza/SwiftTerm", "1.20.0"..<"2.0.0")
+        // Both API generations are supported (see SwiftTermEngine.swift). 1.99.0 is NOT supported
+        // (no terminalContentSnapshot); 2.0.0 final is excluded until checked against the adapter.
+        .package(url: "https://github.com/jasonkolodziej/SwiftTerm",
+                 revision: "783ae5091faeb986132135e8dd71bf1b13712dc8"),
     ],
     targets: [
         // Engine abstraction + SwiftTerm adapter, PTY environment, password-prompt detection.

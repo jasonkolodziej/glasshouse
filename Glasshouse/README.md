@@ -41,8 +41,12 @@ project.yml                      XcodeGen spec (bundle layout, entitlements, sig
 
 | SwiftTerm | How to build | How the adapter gets output, OSC sequences and geometry |
 |---|---|---|
-| **1.99.1+** (default; preview of 2.0) | nothing extra | `observeOscEvents`, `setProcessOutputHandler`, `terminalContentSnapshot(region:)` |
-| **1.20.x** (legacy) | pin it and enable the `SwiftTerm1` trait | overrides `dataReceived(slice:)` and reads `getTerminal().buffer` |
+| **1.99.1** (default; preview of 2.0) | nothing extra | `observeOscEvents`, `setProcessOutputHandler`, `terminalContentSnapshot(region:)` |
+| **1.20.x** (legacy) | point `Package.swift` at upstream 1.20.x and enable the `SwiftTerm1` trait | overrides `dataReceived(slice:)` and reads `getTerminal().buffer` |
+
+The default build uses [a fork](https://github.com/jasonkolodziej/SwiftTerm/tree/fix/teardown-qos-1.99.1): 1.99.1
+plus one fix that runs process teardown at the I/O threads' priority, so closing a tab doesn't cause a priority inversion.
+The fix has been sent upstream; switch back to `migueldeicaza/SwiftTerm` once a release includes it.
 
 1.99 rebuilt SwiftTerm's input/output pipeline, so its API changed:
 - `getTerminal()` and the public `terminal` property are gone.
@@ -93,7 +97,7 @@ While `sudo` is in a tab's foreground process group, the **approval card** shows
 
 These were not checked against source or on a Mac. Each one is a quick prototype, worth doing before any UI polish.
 
-1. **SwiftTerm version.** The adapter was checked against SwiftTerm's source at tags v1.20.0 and v1.99.1, but it hasn't been compiled. Default builds resolve to **1.99.1+**. To build against 1.20.x, pin SwiftTerm and enable the `SwiftTerm1` trait. **1.99.0 is not supported.** Two things to watch:
+1. **SwiftTerm version.** The adapter was checked against SwiftTerm's source at tags v1.20.0 and v1.99.1, but it hasn't been compiled. Default builds use **1.99.1** (from the fork above). To build against 1.20.x, point `Package.swift` at upstream 1.20.x and enable the `SwiftTerm1` trait. **1.99.0 is not supported.** Two things to watch:
    - SwiftTerm 1.99 is a preview of 2.0, so later 1.99.x releases may change its API again.
    - On 1.20, the cursor row is only accurate while the view is scrolled to the bottom (`yBase` isn't public), and `getText`'s row coordinates still need checking.
 2. **`KERN_PROCARGS2` on setuid-root `sudo`.** If the kernel refuses it, the card falls back to the shell-reported command and labels it "reported by shell".
