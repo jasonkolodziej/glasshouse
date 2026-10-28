@@ -63,6 +63,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.glasshouse.app
+        # Icon set from Apps/Glasshouse/GlasshouseIcons.xcassets: AppIconA (Pane),
+        # AppIconB (Print Prompt) or AppIconC (Glasshouse). See README → App icon.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIconA
         # Terminals cannot be sandboxed: child shells inherit the sandbox.
         # Ship outside the Mac App Store: Developer ID + hardened runtime + notarization.
         ENABLE_APP_SANDBOX: NO

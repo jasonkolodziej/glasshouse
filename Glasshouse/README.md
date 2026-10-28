@@ -17,8 +17,45 @@ open Glasshouse.xcodeproj      # set DEVELOPMENT_TEAM in project.yml first (need
 swift test                     # wire-protocol, OSC parser and APCA tests (no UI, no signing needed)
 ```
 
+Edit `project.yml`, not the generated project: `xcodegen generate` overwrites `Glasshouse.xcodeproj`, so changes made in
+Xcode's project editor (build settings, files dragged into the navigator) are lost on the next run. Files placed under
+`Apps/Glasshouse/` are picked up automatically.
+
 Distribution: Developer ID + hardened runtime + notarization. **Not sandboxed, not Mac App Store**: a sandboxed terminal's
 child shells inherit the sandbox.
+
+## App icon
+
+`Apps/Glasshouse/GlasshouseIcons.xcassets` holds three candidate icons. Each set has all ten macOS sizes. The 16 and 32 pt
+sizes are simplified drawings so they stay readable, and every image follows Apple's macOS grid: an 824 px body centred
+on a 1024 px canvas with a transparent margin.
+
+| Set | Name |
+|---|---|
+| `AppIconA` (default) | Pane |
+| `AppIconB` | Print Prompt |
+| `AppIconC` | Glasshouse |
+
+**Switch icons:** change `ASSETCATALOG_COMPILER_APPICON_NAME` under the `Glasshouse` target in `project.yml`, then run
+`xcodegen generate` and build. To try one without editing anything, override the setting for a single build:
+
+```sh
+xcodebuild -project Glasshouse.xcodeproj -scheme Glasshouse ASSETCATALOG_COMPILER_APPICON_NAME=AppIconB build
+```
+
+**If the Dock or Finder still shows the old icon** (macOS caches icons aggressively):
+1. Clean the build folder (⇧⌘K) and delete the app from DerivedData.
+2. Run `killall Dock`.
+3. If Finder is still stale, `touch` the built `Glasshouse.app`.
+
+**Liquid Glass on macOS 26:** these PNG sets work on Tahoe, but Tahoe draws the full Liquid Glass treatment (specular
+edges, tinted and clear modes) only from an Icon Composer `.icon` file. Once an icon is chosen:
+1. Open that set's `icon_512x512@2x.png` (the 1024 px master) in Icon Composer.
+2. Split it into layers: background, glyph and glass pane.
+3. Save the `.icon` file in `Apps/Glasshouse/`.
+4. Set `ASSETCATALOG_COMPILER_APPICON_NAME` to the `.icon` file's name, without the extension.
+5. Regenerate, and check in Xcode that the `.icon` file is in the target's Copy Bundle Resources phase.
+6. Delete the PNG sets you no longer need.
 
 ## Layout
 
@@ -32,6 +69,7 @@ Sources/
   DesignSystem/                  glassChrome() + accessible fallbacks, APCA contrast floor, TrustCapsule, tokens
 Apps/
   Glasshouse/                    SwiftUI app: workspace, tabs, pane overlays, palette, approval card, settings
+    GlasshouseIcons.xcassets/    app icon candidates AppIconA/B/C (see App icon)
   GlasshouseAgent/               LSUIElement login item serving Secure Enclave keys (opt-in)
 Tests/                           swift-testing suites
 project.yml                      XcodeGen spec (bundle layout, entitlements, signing)
