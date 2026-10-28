@@ -91,6 +91,9 @@ struct TabStrip: View {
                         close: { workspace.close(session) })
             }
         }
+        // Always take the ideal width: the toolbar keeps proposing the width it last measured, so
+        // without this a hovered tab truncates its title to fit the close button instead of growing.
+        .fixedSize()
         .padding(GH.Size.tabGroupInset)
         .glassChrome(.controls, cornerRadius: GH.Radius.capsule)
         .animation(GH.motion, value: workspace.selectedID)
