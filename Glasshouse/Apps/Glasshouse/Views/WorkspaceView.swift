@@ -52,6 +52,7 @@ struct WorkspaceView: View {
         ToolbarItem(placement: .principal) {
             TabStrip(workspace: workspace)
         }
+        .sharedBackgroundVisibility(.hidden) // TabStrip draws its own capsule with a uniform inset
         ToolbarSpacer(.flexible)
         ToolbarItem(placement: .primaryAction) {
             Button { workspace.newTab() } label: { Label("New Tab", systemImage: "plus") }
@@ -69,15 +70,18 @@ struct WorkspaceView: View {
 
 /// Tabs live in one glass group. Active tab = fill + weight (tint is reserved for trust signals).
 /// Titles are plain text: program-controlled strings must never look like the trust capsule.
+///
+/// The group draws its own capsule (the toolbar item's shared glass is hidden) so every tab bubble
+/// sits concentric inside it: the same `tabGroupInset` on all four sides, like a segmented control.
 struct TabStrip: View {
     @Bindable var workspace: Workspace
     @Namespace private var selection
 
     var body: some View {
-        // With one tab there is nothing to select between: a filled pill inside the toolbar's own
-        // glass bubble reads as a pressed button, so a lone tab is just its title.
+        // With one tab there is nothing to select between: a filled pill inside the group would
+        // read as a pressed button, so a lone tab is just its title.
         let multiple = workspace.sessions.count > 1
-        HStack(spacing: 2) {
+        HStack(spacing: GH.Size.tabSpacing) {
             ForEach(workspace.sessions) { session in
                 TabItem(session: session,
                         active: multiple && session.id == workspace.selectedID,
@@ -87,12 +91,15 @@ struct TabStrip: View {
                         close: { workspace.close(session) })
             }
         }
+        .padding(GH.Size.tabGroupInset)
+        .glassChrome(.controls, cornerRadius: GH.Radius.capsule)
         .animation(GH.motion, value: workspace.selectedID)
         .animation(GH.motion, value: workspace.sessions.map(\.id))
     }
 }
 
-/// One tab: hover reveals a leading close button (Safari / Terminal.app placement).
+/// One tab. The title is centred in its bubble; hovering grows the bubble to the leading side to
+/// reveal a close button (Safari / Terminal.app placement), and leaving shrinks it back.
 private struct TabItem: View {
     let session: TerminalSession
     let active: Bool
@@ -102,9 +109,11 @@ private struct TabItem: View {
     let close: () -> Void
     @State private var hovering = false
 
+    private var showsClose: Bool { closable && hovering }
+
     var body: some View {
-        HStack(spacing: 4) {
-            if closable {
+        HStack(spacing: GH.Space.xs) {
+            if showsClose {
                 Button(action: close) {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                         .frame(width: 16, height: 16)
@@ -112,15 +121,18 @@ private struct TabItem: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
                 .help("Close Tab (⌘W)")
                 .accessibilityHidden(true) // exposed as a named action on the tab instead
+                .transition(.opacity.combined(with: .scale(scale: 0.6)))
             }
             statusDot
             title
         }
-        .padding(.leading, closable ? 4 : 10).padding(.trailing, 10).padding(.vertical, 4)
+        // Symmetric padding while the close button is hidden keeps the title centred; with it shown
+        // the leading side tightens so the button sits as far from the edge as the title does.
+        .padding(.leading, showsClose ? GH.Space.xs + 2 : GH.Space.m)
+        .padding(.trailing, GH.Space.m)
+        .frame(height: GH.Size.tabHeight)
         .background {
             if active {
                 Capsule().fill(Color.primary.opacity(0.10))
@@ -131,7 +143,7 @@ private struct TabItem: View {
         }
         .contentShape(Capsule())
         .onTapGesture(perform: select)
-        .onHover { hovering = $0 }
+        .onHover { inside in withAnimation(GH.motion) { hovering = inside } }
         .contextMenu { Button("Close Tab", action: close) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(session.title)

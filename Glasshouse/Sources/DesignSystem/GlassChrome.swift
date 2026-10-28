@@ -19,6 +19,11 @@ public enum GH {
         public static let cardWidth: CGFloat = 400
         public static let paletteWidth: CGFloat = 600
         public static let sidebarWidth: CGFloat = 248
+        /// Tab bubble height. With `tabGroupInset` on each side the group is 36 pt, the height of
+        /// the toolbar's own glass buttons, and the tab and group capsules are concentric.
+        public static let tabHeight: CGFloat = 28
+        public static let tabGroupInset: CGFloat = 4
+        public static let tabSpacing: CGFloat = 2
     }
     /// One spring for every L3 transient; `.identity` under Reduce Motion is applied by `ghTransition`.
     public static let motion: Animation = .smooth(duration: 0.25)
