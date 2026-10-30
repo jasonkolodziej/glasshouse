@@ -447,6 +447,55 @@ ssh-keygen -lf ~/.ssh/glasshouse.pub
 # 256 SHA256:Xb3k…qY0 you@mac (ECDSA-SK)
 ```
 
+### SSH Key Installation
+
+You install the **public** key in the server's `~/.ssh/authorized_keys`. The private key stays in the Secure Enclave, so there's nothing secret to copy.
+
+#### Copy the public key to the server
+
+The usual way, from your Mac:
+
+> [!TIP]
+> If it asks for Touch ID or errors on the new key while checking whether it's already installed, add `-f` to skip that check:
+
+```sh
+ssh-copy-id -i ~/.ssh/glasshouse.pub you@server
+
+# skip check
+ssh-copy-id -f -i ~/.ssh/glasshouse.pub you@server
+```
+
+This logs in the way you do today (password or an existing key) and appends the public key to `~/.ssh/authorized_keys` on the server.
+
+#### By hand
+
+If you'd rather do it by hand, this has the same effect and also sets the permissions `sshd` requires:
+
+```sh
+cat ~/.ssh/glasshouse.pub | ssh you@server \
+  'mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+```
+
+If you have no login on the server yet, paste the contents of `glasshouse.pub` as one line at the end of `~/.ssh/authorized_keys` through whatever access you do have: a console, cloud-init, or your provider's control panel.
+
+#### Test it before relying on it
+
+```sh
+ssh -i ~/.ssh/glasshouse -o IdentitiesOnly=yes \
+    -o SecurityKeyProvider=/usr/lib/ssh-keychain.dylib you@server
+```
+
+You should get one Touch ID prompt and then a shell. Inside a Glasshouse tab you can leave out the `SecurityKeyProvider` option, because Glasshouse already sets it in its tabs.
+
+**3. Make it permanent:** add the host block to `~/.ssh/config` (it's in the README under "SSH, option 1"), and from then on `ssh myserver` is enough.
+
+**Notes:**
+
+- **The server** needs OpenSSH 8.2 or later; any Ubuntu from 20.04 on is fine. No `sshd_config` changes are needed, because `sk-ecdsa` keys are allowed by default.
+- **Recovery:** install a second key, from another Mac or a hardware key, before turning off password login on the server. A Secure Enclave key can't be recovered if you lose this Mac.
+- **GitHub or GitLab:** there's no file to edit. Go to **Settings › SSH and GPG keys › New SSH key**, choose the type **Authentication Key**, and paste the contents of `glasshouse.pub`. Test it with `ssh -T git@github.com`.
+- **A Glasshouse Agent key** goes on the server the same way. Click **Copy Public Key** in Settings, then run `pbpaste | ssh you@server 'cat >> ~/.ssh/authorized_keys'`.
+
 ## Not yet built (TODO markers in code)
 
 - **Agent:** verifying the `session-bind` signature. The host key is display-only until this is done.
