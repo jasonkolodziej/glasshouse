@@ -321,6 +321,21 @@ struct SSHConfigStoreTests {
         #expect(keys.first?.publicKey == "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNr you@mac")
     }
 
+    @Test func findsSecurityKeysAndReadsPublicHalves() throws {
+        let box = try Sandbox()
+        try box.write("handle", ".ssh/glasshouse")
+        try box.write(keyLine(GlasshouseSSH.secureEnclaveAlgorithm, "you@mac") + "\n", ".ssh/glasshouse.pub")
+        try box.write("handle", ".ssh/id_ed25519_sk")
+        try box.write(keyLine("sk-ssh-ed25519@openssh.com", "yubikey", seed: 3) + "\n", ".ssh/id_ed25519_sk.pub")
+
+        #expect(box.store.securityKeyFiles().map(\.name) == ["glasshouse", "id_ed25519_sk"])
+        #expect(box.store.securityKeyFiles().map(\.type) == [GlasshouseSSH.secureEnclaveAlgorithm, "sk-ssh-ed25519@openssh.com"])
+        #expect(box.store.secureEnclaveKeys().map(\.name) == ["glasshouse"])
+        #expect(try box.store.publicKey(named: "id_ed25519_sk").comment == "yubikey")
+        #expect(throws: SSHConfigError.missingPublicKey("nope")) { try box.store.publicKey(named: "nope") }
+        #expect(throws: SSHConfigError.missingPublicKey("../x")) { try box.store.publicKey(named: "../x") }
+    }
+
     @Test func followsIncludesForHostAliases() throws {
         let box = try Sandbox()
         try box.write(SSHConfigText.includeBlock + "\nInclude config.d/*.conf\nInclude ~/.ssh/config\nHost top\n",
@@ -344,18 +359,51 @@ struct SSHConfigStoreTests {
 
 @Suite("Setup scripts")
 struct ScriptTests {
-    @Test func installScriptChecksTheEntryThenCopiesWithTheUsualLogin() throws {
-        let script = try GlasshouseSSHScripts.installKey(on: myserver)
+    private let touchIDKey = try! SSHPublicKey(parsing: keyLine(GlasshouseSSH.secureEnclaveAlgorithm, "you@mac", seed: 1))
+    private let backup = keyLine("ssh-ed25519", "laptop", seed: 2)
+
+    @Test func installScriptChecksTheEntryThenInstallsWithTheUsualLogin() throws {
+        let script = try GlasshouseSSHScripts.installKeys(on: myserver, touchIDKey: touchIDKey, securityKey: nil)
         #expect(script.contains("ssh -G 'myserver' | grep -qx 'pubkeyacceptedalgorithms sk-ecdsa-sha2-nistp256@openssh.com'"))
-        #expect(script.contains("ssh-copy-id -f -i ~/.ssh/glasshouse.pub -o IdentityAgent=SSH_AUTH_SOCK -o IdentitiesOnly=no"))
-        #expect(script.contains("-o PubkeyAcceptedAlgorithms=+sk-ecdsa-sha2-nistp256@openssh.com 'myserver'"))
+        #expect(script.contains("ssh -o IdentityAgent=SSH_AUTH_SOCK -o IdentitiesOnly=no"))
+        #expect(script.contains("-o PubkeyAcceptedAlgorithms=+sk-ecdsa-sha2-nistp256@openssh.com 'myserver' 'sh -s' <<'GLASSHOUSE_REMOTE'"))
+        #expect(script.contains("\nGLASSHOUSE_REMOTE\n"))
         #expect(script.contains("if ssh 'myserver' true;"))
         #expect(script.contains("(you@10.0.0.5:22)"))
+        #expect(script.contains("echo '  - Touch ID key ~/.ssh/glasshouse'"))
     }
 
-    @Test func installScriptRefusesAnInvalidHost() {
+    @Test func offersToRemoveKeysOnlyWhenTheHostHasABackup() throws {
+        let without = try GlasshouseSSHScripts.installKeys(on: myserver, touchIDKey: touchIDKey, securityKey: nil)
+        #expect(!without.contains("read -r -p"))
+        #expect(without.contains("has no backup key"))
+
+        var host = myserver
+        host.backupKeys = [backup]
+        let with = try GlasshouseSSHScripts.installKeys(on: host, touchIDKey: touchIDKey, securityKey: nil)
+        #expect(with.contains("read -r -p \"Remove them from myserver?"))
+        #expect(with.contains("ssh 'myserver' \"sh -s $blobs\" <<'GLASSHOUSE_REMOVE'"))
+        #expect(with.hasSuffix("\nGLASSHOUSE_REMOVE"))
+        #expect(with.contains("echo '  - backup key laptop (ssh-ed25519)'"))
+    }
+
+    @Test func installsTheSecurityKeyAlongsideAndCountsItAsABackup() throws {
+        var host = myserver
+        host.securityKey = .init(keyName: "id_ed25519_sk")
+        let securityKey = try SSHPublicKey(parsing: keyLine("sk-ssh-ed25519@openssh.com", "yubikey", seed: 3))
+        let script = try GlasshouseSSHScripts.installKeys(on: host, touchIDKey: touchIDKey, securityKey: securityKey)
+        #expect(script.contains("echo '  - security key ~/.ssh/id_ed25519_sk'"))
+        #expect(script.contains("read -r -p"))
+    }
+
+    @Test func refusesAKeyThatIsNotASecureEnclaveKey() throws {
+        let plain = try SSHPublicKey(parsing: backup)
+        #expect(throws: SSHConfigError.missingPublicKey("glasshouse")) {
+            try GlasshouseSSHScripts.installKeys(on: myserver, touchIDKey: plain, securityKey: nil)
+        }
         #expect(throws: SSHConfigError.self) {
-            try GlasshouseSSHScripts.installKey(on: ManagedSSHHost(alias: "-x", hostName: "h", keyName: "k"))
+            try GlasshouseSSHScripts.installKeys(on: ManagedSSHHost(alias: "-x", hostName: "h", keyName: "k"),
+                                                 touchIDKey: touchIDKey, securityKey: nil)
         }
     }
 
@@ -372,4 +420,208 @@ struct ScriptTests {
     @Test func quotesForTheShell() {
         #expect(GlasshouseSSHScripts.shellQuote("it's") == #"'it'\''s'"#)
     }
+}
+
+/// Runs the server-side scripts with /bin/sh against a throwaway home, the way `ssh host 'sh -s'` runs them.
+@Suite("Server-side scripts")
+struct RemoteScriptTests {
+    private let seKey = try! SSHPublicKey(parsing: keyLine(GlasshouseSSH.secureEnclaveAlgorithm, "you@mac", seed: 1))
+    private let backup = try! SSHPublicKey(parsing: keyLine("ssh-ed25519", "laptop", seed: 2))
+    private let everyday = keyLine("ssh-ed25519", "id_someID", seed: 4)
+    private let yubikey = keyLine("sk-ssh-ed25519@openssh.com", "yubikey", seed: 5)
+    private let noTouch = keyLine("sk-ssh-ed25519@openssh.com", "kiosk", seed: 6)
+
+    private var items: [GlasshouseSSHScripts.InstallItem] {
+        [.init(key: seKey, label: "Touch ID key ~/.ssh/glasshouse"), .init(key: backup, label: "backup key laptop")]
+    }
+
+    private func makeHome(authorizedKeys: String) throws -> URL {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("glasshouse-remote-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".ssh"), withIntermediateDirectories: true)
+        try authorizedKeys.write(to: home.appendingPathComponent(".ssh/authorized_keys"), atomically: true, encoding: .utf8)
+        return home
+    }
+
+    private func authorizedKeys(_ home: URL) throws -> String {
+        try String(contentsOf: home.appendingPathComponent(".ssh/authorized_keys"), encoding: .utf8)
+    }
+
+    @Test func addsMissingKeysOnceAndListsKeysThatSkipTheTouch() throws {
+        // The Secure Enclave key is already there under another comment; the file has no final newline.
+        let existing = """
+            # keys
+            \(everyday)
+            no-touch-required \(noTouch)
+            \(yubikey)
+            \(seKey.type) \(seKey.blob) old-comment
+            """
+        let home = try makeHome(authorizedKeys: existing)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let output = try runShell(GlasshouseSSHScripts.remoteInstallScript(items: items), home: home)
+        let lines = output.split(separator: "\n").map(String.init)
+        #expect(lines.contains("present\tTouch ID key ~/.ssh/glasshouse"))
+        #expect(lines.contains("added\tbackup key laptop"))
+        let flagged = lines.filter { $0.hasPrefix("notouch\t") }.map { $0.split(separator: "\t").map(String.init) }
+        #expect(flagged.map { $0[1] } == [try SSHPublicKey(parsing: everyday).blob, try SSHPublicKey(parsing: noTouch).blob])
+        #expect(flagged.first?[3] == " id_someID")
+
+        #expect(try authorizedKeys(home) == existing + "\n" + backup.line + "\n")
+        _ = try runShell(GlasshouseSSHScripts.remoteInstallScript(items: items), home: home)
+        #expect(try authorizedKeys(home) == existing + "\n" + backup.line + "\n")
+        let permissions = try FileManager.default.attributesOfItem(
+            atPath: home.appendingPathComponent(".ssh/authorized_keys").path)[.posixPermissions] as? NSNumber
+        #expect(permissions?.intValue == 0o600)
+    }
+
+    @Test func createsTheFileWhenTheServerHasNone() throws {
+        let home = try makeHome(authorizedKeys: "")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".ssh"))
+        let output = try runShell(GlasshouseSSHScripts.remoteInstallScript(items: items), home: home)
+        #expect(!output.contains("notouch"))
+        #expect(try authorizedKeys(home) == seKey.line + "\n" + backup.line + "\n")
+    }
+
+    @Test func removesOnlyTheChosenKeysAndKeepsACopy() throws {
+        let existing = "\(everyday)\n\(seKey.line)\nno-touch-required \(noTouch)\n\(backup.line)\n"
+        let home = try makeHome(authorizedKeys: existing)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let blobs = try [everyday, noTouch].map { try SSHPublicKey(parsing: $0).blob }
+        let output = try runShell(GlasshouseSSHScripts.remoteRemovalScript, home: home, arguments: blobs)
+        #expect(output.hasPrefix("Removed 2 key(s)."))
+        #expect(try authorizedKeys(home) == "\(seKey.line)\n\(backup.line)\n")
+        let copies = try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".ssh").path)
+            .filter { $0.hasPrefix("authorized_keys.glasshouse-") }
+        #expect(copies.count == 1)
+        #expect(try String(contentsOf: home.appendingPathComponent(".ssh/\(copies[0])"), encoding: .utf8) == existing)
+    }
+
+    private func runShell(_ script: String, home: URL, arguments: [String] = []) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-s"] + arguments
+        process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        input.fileHandleForWriting.write(Data(script.utf8))
+        try input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(process.terminationStatus == 0, "\(text)")
+        return text
+    }
+}
+
+@Suite("Public keys")
+struct PublicKeyTests {
+    @Test func parsesAndNormalizesALine() throws {
+        let line = keyLine("ssh-ed25519", "laptop", seed: 2)
+        let key = try SSHPublicKey(parsing: "  " + line.replacingOccurrences(of: " ", with: "\t") + "\n")
+        #expect(key.type == "ssh-ed25519")
+        #expect(key.comment == "laptop")
+        #expect(key.line == line)
+        #expect(!key.needsTouch)
+        #expect(try SSHPublicKey(parsing: keyLine("sk-ssh-ed25519@openssh.com")).needsTouch)
+    }
+
+    @Test(arguments: [
+        "no-pty " + keyLine("ssh-ed25519"),
+        "command=\"id\" " + keyLine("ssh-ed25519"),
+        "ssh-dss AAAAB3NzaC1kc3M=",
+        "ssh-ed25519 not*base64",
+        keyLine("ssh-ed25519") + "\n" + keyLine("ssh-ed25519", seed: 9),
+        "ecdsa-sha2-nistp256 " + keyLine("ssh-ed25519").split(separator: " ")[1],
+        "",
+    ])
+    func refusesAnythingButOneKey(text: String) {
+        #expect(throws: SSHConfigError.self) { try SSHPublicKey(parsing: text) }
+    }
+
+    @Test func makesCommentsSafeForShellQuoting() throws {
+        let key = try SSHPublicKey(parsing: keyLine("ssh-ed25519", #"jo's "key" \x"#))
+        #expect(key.comment == "jo_s _key_ _x")
+    }
+}
+
+@Suite("Backup and security keys")
+struct BackupAndSecurityKeyTests {
+    @Test func loadsHostsSavedBeforeTheseFieldsExisted() throws {
+        let json = #"{"hosts":[{"alias":"myserver","hostName":"10.0.0.5","keyName":"glasshouse"}]}"#
+        let config = try JSONDecoder().decode(ManagedSSHConfig.self, from: Data(json.utf8))
+        #expect(config.hosts.first?.backupKeys == [])
+        #expect(config.hosts.first?.securityKey == nil)
+    }
+
+    @Test func normalizesAndDeduplicatesBackupKeys() throws {
+        let line = keyLine("ssh-ed25519", "laptop", seed: 2)
+        var host = myserver
+        host.backupKeys = ["  \(line)  ", line.replacingOccurrences(of: " laptop", with: " other-name")]
+        #expect(try host.validated().backupKeys == [line])
+
+        host.backupKeys = ["no-pty " + line]
+        #expect(throws: SSHConfigError.self) { try host.validated() }
+        host.backupKeys = (0..<17).map { keyLine("ssh-ed25519", seed: UInt8($0)) }
+        #expect(throws: SSHConfigError.tooManyBackupKeys) { try host.validated() }
+    }
+
+    @Test func securityKeyGetsItsOwnEntry() throws {
+        var host = myserver
+        host.securityKey = .init(keyName: "id_ed25519_sk")
+        let host2 = try host.validated()
+        #expect(host2.aliases == ["myserver", "myserver-key"])
+        #expect(host2.configBlock.hasSuffix("""
+
+            Host myserver-key
+                HostName 10.0.0.5
+                User you
+                Port 22
+                IdentityFile ~/.ssh/id_ed25519_sk
+                SecurityKeyProvider internal
+                IdentitiesOnly yes
+                IdentityAgent none
+                PubkeyAcceptedAlgorithms sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com
+                ForwardAgent no
+
+            """))
+    }
+
+    @Test(arguments: [("internal", true), ("/opt/homebrew/lib/libsk-libfido2.dylib", true),
+                      ("libsk.dylib", false), ("/a b", false), ("/x\nProxyCommand id", false), ("%d/sk", false)])
+    func checksTheProvider(provider: String, valid: Bool) {
+        #expect(ManagedSSHHost.isValidProvider(provider) == valid)
+    }
+
+    @Test func securityKeyMustBeADifferentKey() {
+        var host = myserver
+        host.securityKey = .init(keyName: "glasshouse")
+        #expect(throws: SSHConfigError.invalidKeyName("glasshouse")) { try host.validated() }
+    }
+
+    @Test func aliasesStayUniqueAcrossEntries() throws {
+        var config = ManagedSSHConfig()
+        var a = ManagedSSHHost(alias: "a", hostName: "h", keyName: "k")
+        a.securityKey = .init(keyName: "sk")
+        try config.upsert(a)
+        #expect(throws: SSHConfigError.duplicateAlias("a-key")) {
+            try config.upsert(ManagedSSHHost(alias: "a-key", hostName: "h", keyName: "k"))
+        }
+        #expect(config.hosts(usingKey: "sk").map(\.alias) == ["a"])
+        let text = "Host a-key\n    User other\n"
+        #expect(SSHConfigText.conflicts(in: text, aliases: config.hosts.flatMap(\.aliases)).map(\.alias) == ["a-key"])
+    }
+}
+
+/// A well-formed public key line of `type`: the key data starts with the type name, like a real one.
+func keyLine(_ type: String, _ comment: String = "", seed: UInt8 = 1) -> String {
+    func field(_ bytes: [UInt8]) -> [UInt8] { withUnsafeBytes(of: UInt32(bytes.count).bigEndian, Array.init) + bytes }
+    var blob = field(Array(type.utf8)) + field(Array(repeating: seed, count: 32))
+    if type.hasPrefix("sk-") { blob += field(Array("ssh:".utf8)) }
+    let line = "\(type) \(Data(blob).base64EncodedString())"
+    return comment.isEmpty ? line : "\(line) \(comment)"
 }

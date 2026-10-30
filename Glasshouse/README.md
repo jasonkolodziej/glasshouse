@@ -262,18 +262,58 @@ Include ~/.ssh/glasshouse.conf
        ForwardAgent no
    ```
 
-5. Click **Install Key…** next to the host. A tab opens with a script that:
+5. In the same sheet, add a way in for when this Mac isn't available (see [Backup keys](#backup-keys)). Settings marks
+   a host without one with an orange "No backup key".
+6. Click **Install Keys…** next to the host. A tab opens with a script that:
    1. checks with `ssh -G` that Glasshouse's entry is in effect, and stops if it isn't;
-   2. runs `ssh-copy-id`, which logs in the way you do today (password or another key) and appends the public key to
-      `~/.ssh/authorized_keys` on the server. Three `-o` options undo the entry's restrictions for this one command:
-      `IdentityAgent=SSH_AUTH_SOCK`, `IdentitiesOnly=no` and `PubkeyAcceptedAlgorithms=+sk-ecdsa-…`;
-   3. logs in again with only the new key. This one must ask for Touch ID.
+   2. logs in the way you do today (password or another key) and adds the host's keys to
+      `~/.ssh/authorized_keys` on the server: the Touch ID key, the security key if there is one, and the backup keys.
+      A key that's already there isn't added again, so running it twice is safe. Three `-o` options undo the entry's
+      restrictions for this one login: `IdentityAgent=SSH_AUTH_SOCK`, `IdentitiesOnly=no` and
+      `PubkeyAcceptedAlgorithms=+sk-ecdsa-…`;
+   3. logs in again with only the Touch ID key. This one must ask for Touch ID;
+   4. lists the server's other keys that log in without Touch ID or a security-key tap, and offers to remove them (see
+      [Keys that skip Touch ID](#keys-that-skip-touch-id)).
 
    For GitHub or GitLab there's no server to install on: click **Copy Public Key** and paste it into their SSH key
    settings, as an **Authentication Key**.
-6. Log in with `ssh myserver`, or click **Connect**. Every login shows one system Touch ID dialog.
-7. Register a second key, from another Mac or a hardware security key, as a backup. Secure Enclave keys can't be
-   backed up, so losing this Mac means losing this key.
+7. Log in with `ssh myserver`, or click **Connect**. Every login shows one system Touch ID dialog.
+
+#### Backup keys
+
+A Secure Enclave key can't be copied or backed up: if this Mac is lost or broken, its key is gone. Give each host at
+least one other way in. **Add Host…** and **Edit…** have two places for it:
+
+- **Backup keys (from other devices):** paste public keys, one per line, or click **Add .pub File…**. Use a key from
+  another computer, or better, from a security key you keep somewhere safe. Glasshouse checks each one is a real public
+  key (options such as `command="…"` aren't accepted), and **Install Keys…** puts them on the server.
+- **Security key on this Mac:** pick a FIDO security key handle in `~/.ssh` (a YubiKey, for example). Glasshouse adds a
+  second entry, `myserver-key`, that signs only with it, so `ssh myserver-key` works with a tap when Touch ID doesn't.
+  It has its own entry because `SecurityKeyProvider` is one setting per host, and the main entry's is Apple's Secure
+  Enclave provider. The provider defaults to `internal`, OpenSSH's built-in FIDO support. If ssh says that isn't
+  enabled, use Homebrew's OpenSSH (`brew install openssh`) or a provider library's full path. Its key also counts as a
+  backup if it was created as a *resident* key, which you can load on another computer with `ssh-keygen -K`:
+
+  ```sh
+  ssh-keygen -t ed25519-sk -O resident -O verify-required -C "yubikey" -f ~/.ssh/id_ed25519_sk
+  ```
+
+A plain key (ed25519, RSA) on another computer works as a backup but logs in without a touch. A security key kept
+elsewhere is the stronger choice.
+
+#### Keys that skip Touch ID
+
+Touch ID is enforced by this Mac's ssh config, not by the server: the server accepts any key in its `authorized_keys`.
+After the Touch ID login works, **Install Keys…** lists the server's keys that log in without Touch ID or a
+security-key tap: plain keys, and security keys marked `no-touch-required`. The host's own keys, its backup keys
+included, are never listed.
+
+- **With a backup key:** it asks whether to remove them (default: no). The removal runs over the Touch ID login,
+  copies `authorized_keys` to `authorized_keys.glasshouse-DATE` on the server first, and removes only the listed keys.
+- **Without a backup key:** it lists them but doesn't offer removal, because without this Mac they may be your only
+  way in.
+
+Removing your everyday key also stops it working for other aliases that use it, such as `myserver.local`.
 
 **Why the entry needs `IdentityAgent none` and `PubkeyAcceptedAlgorithms`:** without them, `ssh myserver` can log in
 without ever asking for Touch ID. Two OpenSSH rules combine:
@@ -296,7 +336,7 @@ included from the top.
 
 **Notes:**
 
-- Removing a host in Settings removes it from `~/.ssh/glasshouse.conf` only. Its key stays in the server's
+- Removing a host in Settings removes it from `~/.ssh/glasshouse.conf` only. Its keys stay in the server's
   `authorized_keys`.
 - To list or remove Secure Enclave identities, see `man sc_auth` (`list-ctk-identities`, `delete-ctk-identity`).
 
@@ -305,22 +345,28 @@ sequenceDiagram
     actor You
     participant S as Settings
     participant T as New Glasshouse tab
-    participant SSH as ssh and ssh-copy-id
+    participant SSH as ssh
     participant Srv as Server
-    You->>S: Install Key… next to myserver
+    You->>S: Install Keys… next to myserver
     S->>T: Open a tab with the install script
     T->>SSH: ssh -G myserver
     alt Glasshouse entry not in effect
         SSH-->>T: PubkeyAcceptedAlgorithms is not limited to the Secure Enclave key
         T->>You: Stop and ask for the Include in ~/.ssh/config
     else Entry in effect
-        T->>SSH: ssh-copy-id with options that restore your usual login
-        SSH->>Srv: Log in with your password or existing key
-        SSH->>Srv: Append the public key to authorized_keys
+        T->>SSH: Log in with options that restore your usual login
+        SSH->>Srv: Add the Touch ID, security and backup keys that are missing
+        Srv-->>T: Keys that log in without a touch
         T->>SSH: ssh myserver true
         SSH->>Srv: Offer only the Secure Enclave key
         SSH->>You: System Touch ID dialog
         Srv-->>T: Logged in, so Touch ID login works
+        opt Keys without a touch were found and the host has a backup
+            T->>You: Remove them? Default no
+            You->>T: Yes
+            T->>SSH: Over the Touch ID login
+            SSH->>Srv: Copy authorized_keys aside, remove the listed keys
+        end
     end
 ```
 
@@ -449,7 +495,9 @@ flowchart TD
 | Symptom | Likely cause and fix |
 | --- | --- |
 | `ssh myserver` logs in without asking for Touch ID | Glasshouse's entry isn't in effect, so another key logged in, usually one from `Host *` that `ssh-agent` holds. **Settings › SSH Keys › Hosts** should show the Include as in effect. `ssh -G myserver \| grep -i pubkeyaccepted` should print only `sk-ecdsa-sha2-nistp256@openssh.com`. `ssh -v myserver` shows which key logged in. |
-| **Install Key…** is greyed out, or the script says the settings "are not in effect" | Click **Add Include to ~/.ssh/config** (or **Move It to the Top**) under **Hosts**. |
+| **Install Keys…** is greyed out, or the script says the settings "are not in effect" | Click **Add Include to ~/.ssh/config** (or **Move It to the Top**) under **Hosts**. |
+| `ssh myserver-key` says internal security key support isn't enabled | This build of OpenSSH has no built-in FIDO support. Use Homebrew's OpenSSH (`brew install openssh`), or set the host's security key provider to a provider library's full path. |
+| **Install Keys…** lists keys but doesn't offer to remove them | The host has no backup key. Add one in **Edit…**, then run **Install Keys…** again. |
 | A setup button does nothing | No Glasshouse window has been focused yet. Click into a terminal tab, then try again. |
 | Status still reads "Not set up" after setup | Click **Refresh**. Check with `cat /etc/pam.d/sudo_local`. |
 | Orange warning about `pam_reattach` | `sudo_local` loads `pam_reattach` from a user-writable path such as `/opt/homebrew`, which lets any process running as you gain root. Re-run setup with the tmux option ticked. |
@@ -528,7 +576,7 @@ ssh-keygen -lf ~/.ssh/glasshouse.pub
 You install the **public** key in the server's `~/.ssh/authorized_keys`. The private key stays in the Secure Enclave, so there's nothing secret to copy.
 
 > [!NOTE]
-> For a host in **Settings › SSH Keys › Hosts**, click **Install Key…**: it does all of this for you. By hand,
+> For a host in **Settings › SSH Keys › Hosts**, click **Install Keys…**: it does all of this for you, backup keys included. By hand,
 > `ssh-copy-id myserver` fails for such a host, because Glasshouse's entry only offers the Touch ID key, which the
 > server doesn't know yet. Add the options that restore your usual login for that one command:
 >

@@ -29,6 +29,8 @@ final class TerminalSession: Identifiable {
     var title = "Shell"
     var cwd: URL?
     var exited = false
+    /// Colours the engine draws with; the pane paints its padding in the same background.
+    let appearance: TerminalAppearance
 
     private(set) var timeline = CommandTimeline()
     private(set) var trust: TrustState = .idle
@@ -53,7 +55,9 @@ final class TerminalSession: Identifiable {
     init(engine: any TerminalEngine = SwiftTermEngine(),
          launch: ShellIntegrationInstaller.LaunchPlan) {
         self.engine = engine
-        engine.apply(Theme.current())
+        let appearance = Theme.current()
+        self.appearance = appearance
+        engine.apply(appearance)
         engine.onEvent = { [weak self] in self?.handle($0) }
         engine.start(launch)
     }

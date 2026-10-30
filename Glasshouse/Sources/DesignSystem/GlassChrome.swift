@@ -24,6 +24,9 @@ public enum GH {
         public static let tabHeight: CGFloat = 28
         public static let tabGroupInset: CGFloat = 4
         public static let tabSpacing: CGFloat = 2
+        /// Space between the window edge and the terminal grid. The trailing side has the gutter instead.
+        public static let terminalPaddingLeading: CGFloat = 10
+        public static let terminalPaddingVertical: CGFloat = 6
     }
     /// One spring for every L3 transient; `.identity` under Reduce Motion is applied by `ghTransition`.
     public static let motion: Animation = .smooth(duration: 0.25)

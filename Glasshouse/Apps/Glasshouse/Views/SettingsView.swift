@@ -4,6 +4,7 @@ import ServiceManagement
 import SSHAgentCore
 import SSHConfig
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Which Settings pane is showing. Stored so other views (the command palette) can open a specific one.
 enum SettingsPane: String {
@@ -95,6 +96,7 @@ private struct SSHSettings: View {
     // Built-in Secure Enclave keys and the hosts in ~/.ssh/glasshouse.conf.
     private let sshStore = SSHConfigStore.standard()
     @State private var seKeys: [SSHKeyFile] = []
+    @State private var securityKeyFiles: [SSHKeyFile] = []
     @State private var managed = ManagedSSHConfig()
     @State private var includeStatus: SSHIncludeStatus = .active
     @State private var conflicts: [SSHConfigConflict] = []
@@ -186,7 +188,8 @@ private struct SSHSettings: View {
         .formStyle(.grouped)
         .onAppear { reload(); reloadSSH() }
         .sheet(item: $editing) { draft in
-            HostEditor(draft: draft, keys: seKeys.map(\.name), save: saveHost)
+            HostEditor(draft: draft, keys: seKeys.map(\.name), securityKeys: securityKeyFiles.map(\.name),
+                       save: saveHost)
         }
     }
 
@@ -226,12 +229,22 @@ private struct SSHSettings: View {
                 Text(host.alias)
                 Text("\(host.user.map { "\($0)@" } ?? "")\(host.hostName)\(host.port.map { ":\($0)" } ?? "") · ~/.ssh/\(host.keyName)")
                     .font(.caption).foregroundStyle(.secondary)
+                if let securityKeyAlias = host.securityKeyAlias {
+                    Text("Security key: ssh \(securityKeyAlias)").font(.caption).foregroundStyle(.secondary)
+                }
+                if host.backupKeys.isEmpty && host.securityKey == nil {
+                    Label("No backup key: without this Mac you'd need another way in", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                } else if !host.backupKeys.isEmpty {
+                    Text(host.backupKeys.count == 1 ? "1 backup key" : "\(host.backupKeys.count) backup keys")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            Button("Install Key…") { installKey(on: host) }
+            Button("Install Keys…") { installKeys(on: host) }
                 .disabled(includeStatus != .active)
                 .help(includeStatus == .active
-                      ? "Adds the public key to authorized_keys on the server, then tests a Touch ID login"
+                      ? "Adds this host's keys to authorized_keys on the server, tests a Touch ID login, and lists keys that skip Touch ID"
                       : "Add the Include to ~/.ssh/config first")
             Button("Connect") {
                 Workspace.frontmost?.openHost(SSHHost(alias: host.alias))
@@ -248,6 +261,7 @@ private struct SSHSettings: View {
 
     private func reloadSSH() {
         seKeys = sshStore.secureEnclaveKeys()
+        securityKeyFiles = sshStore.securityKeyFiles()
         do {
             managed = try sshStore.load()
             sshError = nil
@@ -283,9 +297,14 @@ private struct SSHSettings: View {
     private func saveHost(_ draft: HostDraft) throws {
         let portText = draft.port.trimmingCharacters(in: .whitespaces)
         let port: Int? = portText.isEmpty ? nil : (Int(portText) ?? -1)   // -1 is reported as out of range
+        let securityKey = draft.securityKeyName.isEmpty ? nil
+            : ManagedSSHHost.SecurityKey(keyName: draft.securityKeyName, provider: draft.securityKeyProvider)
+        let backupKeys = draft.backupKeysText.split(whereSeparator: \.isNewline).map(String.init)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("#") }
         var config = try sshStore.load()
         try config.upsert(ManagedSSHHost(alias: draft.alias, hostName: draft.hostName, user: draft.user,
-                                         port: port, keyName: draft.keyName),
+                                         port: port, keyName: draft.keyName, securityKey: securityKey,
+                                         backupKeys: backupKeys),
                           replacing: draft.original)
         try sshStore.save(config)
         reloadSSH()
@@ -302,10 +321,13 @@ private struct SSHSettings: View {
         Workspace.frontmost?.hosts.reload()
     }
 
-    private func installKey(on host: ManagedSSHHost) {
+    private func installKeys(on host: ManagedSSHHost) {
         do {
-            requestVisibleScript(title: "Install key on \(host.alias)",
-                                 script: try GlasshouseSSHScripts.installKey(on: host))
+            let touchIDKey = try sshStore.publicKey(named: host.keyName)
+            let securityKey = try host.securityKey.map { try sshStore.publicKey(named: $0.keyName) }
+            requestVisibleScript(title: "Install keys on \(host.alias)",
+                                 script: try GlasshouseSSHScripts.installKeys(on: host, touchIDKey: touchIDKey,
+                                                                              securityKey: securityKey))
         } catch { sshError = error.localizedDescription }
     }
 
@@ -354,6 +376,11 @@ private struct HostDraft: Identifiable {
     var user = ""
     var port = ""
     var keyName: String
+    /// Empty for none.
+    var securityKeyName = ""
+    var securityKeyProvider = GlasshouseSSH.internalProvider
+    /// One public key per line.
+    var backupKeysText = ""
 
     init(keyName: String) { self.keyName = keyName }
 
@@ -364,15 +391,21 @@ private struct HostDraft: Identifiable {
         user = host.user ?? ""
         port = host.port.map(String.init) ?? ""
         keyName = host.keyName
+        securityKeyName = host.securityKey?.keyName ?? ""
+        securityKeyProvider = host.securityKey?.provider ?? GlasshouseSSH.internalProvider
+        backupKeysText = host.backupKeys.joined(separator: "\n")
     }
 }
 
 private struct HostEditor: View {
     @State var draft: HostDraft
     let keys: [String]
+    /// Every sk- key handle; the picker leaves out the one chosen as the Secure Enclave key.
+    let securityKeys: [String]
     let save: @MainActor (HostDraft) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var error: String?
+    @State private var importingBackupKey = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -386,9 +419,38 @@ private struct HostEditor: View {
                 }
                 Text("You type the alias after ssh, as in “ssh \(draft.alias.isEmpty ? "myserver" : draft.alias)”.")
                     .font(.caption).foregroundStyle(.secondary)
+
+                Section("Security key on this Mac (optional)") {
+                    Picker("Key", selection: $draft.securityKeyName) {
+                        Text("None").tag("")
+                        ForEach(securityKeys.filter { $0 != draft.keyName }, id: \.self) {
+                            Text("~/.ssh/\($0)").tag($0)
+                        }
+                    }
+                    if !draft.securityKeyName.isEmpty {
+                        TextField("Provider", text: $draft.securityKeyProvider, prompt: Text("internal"))
+                        Text("Log in with it as “ssh \(draft.alias.isEmpty ? "myserver" : draft.alias)\(GlasshouseSSH.securityKeyAliasSuffix)” when Touch ID isn't available. “internal” is OpenSSH's built-in FIDO support; if ssh says it isn't enabled, use Homebrew's OpenSSH or a provider library's full path.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Backup keys (from other devices)") {
+                    TextEditor(text: $draft.backupKeysText)
+                        .font(.caption.monospaced())
+                        .frame(minHeight: 70)
+                        .accessibilityLabel("Backup public keys, one per line")
+                    HStack {
+                        Text("One public key per line, as in a .pub file. Install Keys… puts them on the server, so you can log in from those devices if this Mac isn't available.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Add .pub File…") { importingBackupKey = true }
+                    }
+                }
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .formStyle(.grouped)
+            .fileImporter(isPresented: $importingBackupKey, allowedContentTypes: [.item],
+                          allowsMultipleSelection: true) { result in addBackupKeys(from: result) }
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -400,7 +462,24 @@ private struct HostEditor: View {
             }
             .padding()
         }
-        .frame(width: 440)
+        .frame(width: 520)
+    }
+
+    private func addBackupKeys(from result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                error = "Couldn't read \(url.lastPathComponent)."; continue
+            }
+            let lines = text.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
+            if draft.backupKeysText.isEmpty || draft.backupKeysText.hasSuffix("\n") {
+                draft.backupKeysText += lines.joined(separator: "\n")
+            } else {
+                draft.backupKeysText += "\n" + lines.joined(separator: "\n")
+            }
+        }
     }
 }
 

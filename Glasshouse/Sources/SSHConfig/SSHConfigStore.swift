@@ -5,10 +5,12 @@ import Darwin
 import Glibc
 #endif
 
-/// A Secure Enclave key handle in `~/.ssh`: `<name>` plus `<name>.pub` of type `sk-ecdsa-sha2-nistp256@openssh.com`.
+/// A security key handle in `~/.ssh`: `<name>` plus `<name>.pub` of an `sk-` type. Secure Enclave keys are
+/// `sk-ecdsa-sha2-nistp256@openssh.com`; a FIDO security key may be that type or `sk-ssh-ed25519@openssh.com`.
 public struct SSHKeyFile: Hashable, Identifiable, Sendable {
     public var id: String { name }
     public let name: String
+    public let type: String
     /// The whole `.pub` line, ready to paste into `authorized_keys`.
     public let publicKey: String
     public let comment: String
@@ -81,7 +83,7 @@ public struct SSHConfigStore: Sendable {
     }
 
     public func conflicts(for config: ManagedSSHConfig) -> [SSHConfigConflict] {
-        SSHConfigText.conflicts(in: mainConfigText(), aliases: config.hosts.map(\.alias))
+        SSHConfigText.conflicts(in: mainConfigText(), aliases: config.hosts.flatMap(\.aliases))
     }
 
     func mainConfigText() -> String {
@@ -92,6 +94,11 @@ public struct SSHConfigStore: Sendable {
 
     /// Secure Enclave key handles in `~/.ssh`, by name. A `.pub` without its handle file is skipped.
     public func secureEnclaveKeys() -> [SSHKeyFile] {
+        securityKeyFiles().filter { $0.type == GlasshouseSSH.secureEnclaveAlgorithm }
+    }
+
+    /// Every `sk-` key handle in `~/.ssh`, by name: Secure Enclave keys and FIDO security keys alike.
+    public func securityKeyFiles() -> [SSHKeyFile] {
         let fm = FileManager.default
         let names = (try? fm.contentsOfDirectory(atPath: sshDirectory.path)) ?? []
         return names.filter { $0.hasSuffix(".pub") }.sorted().compactMap { pubName in
@@ -100,9 +107,19 @@ public struct SSHConfigStore: Sendable {
                   let text = try? String(contentsOf: sshDirectory.appendingPathComponent(pubName), encoding: .utf8),
                   let line = text.split(whereSeparator: \.isNewline).first.map(String.init) else { return nil }
             let fields = line.split(separator: " ", maxSplits: 2).map(String.init)
-            guard fields.count >= 2, fields[0] == GlasshouseSSH.secureEnclaveAlgorithm else { return nil }
-            return SSHKeyFile(name: name, publicKey: line, comment: fields.count == 3 ? fields[2] : "")
+            guard fields.count >= 2, GlasshouseSSH.securityKeyAlgorithms.contains(fields[0]) else { return nil }
+            return SSHKeyFile(name: name, type: fields[0], publicKey: line, comment: fields.count == 3 ? fields[2] : "")
         }
+    }
+
+    /// The parsed public half of `~/.ssh/<name>`.
+    public func publicKey(named name: String) throws -> SSHPublicKey {
+        let url = sshDirectory.appendingPathComponent(name + ".pub")
+        guard ManagedSSHHost.isValidKeyName(name),
+              let text = try? String(contentsOf: url, encoding: .utf8),
+              let line = text.split(whereSeparator: \.isNewline).first,
+              let key = try? SSHPublicKey(parsing: String(line)) else { throw SSHConfigError.missingPublicKey(name) }
+        return key
     }
 
     // MARK: Host aliases across Include files

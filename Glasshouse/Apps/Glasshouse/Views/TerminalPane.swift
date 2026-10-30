@@ -22,12 +22,16 @@ struct TerminalPane: View {
             }
             HStack(spacing: 0) {
                 TerminalHostView(engine: session.engine)
-                    .overlay(alignment: .top) { stickyHeader }
                     .accessibilityLabel("Terminal, \(session.title)")
+                    .padding(.leading, GH.Size.terminalPaddingLeading)
+                    .padding(.vertical, GH.Size.terminalPaddingVertical)
+                    .overlay(alignment: .top) { stickyHeader }
                 CommandGutter(session: session)
                     .frame(width: GH.Size.gutterWidth)
             }
-            .background(Color(nsColor: .textBackgroundColor)) // opaque content layer
+            // Opaque content layer in the terminal's own background, so the padding reads as part of the grid.
+            .background(Color(nsColor: session.appearance.background
+                .withAlphaComponent(session.appearance.backgroundOpacity)))
             .overlay(alignment: .bottom) {
                 if let ctx = session.approval {
                     ApprovalCard(context: ctx)
