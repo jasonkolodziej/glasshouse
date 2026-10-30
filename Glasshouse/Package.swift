@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "GlasshouseSecurity", targets: ["GlasshouseSecurity"]),
         .library(name: "SSHAgentCore", targets: ["SSHAgentCore"]),
         .library(name: "DesignSystem", targets: ["DesignSystem"]),
+        .library(name: "SSHConfig", targets: ["SSHConfig"]),
     ],
     traits: [
         // Default build targets SwiftTerm 1.99.1 (the 2.0 preview API). Enable this trait only if you
@@ -52,10 +53,14 @@ let package = Package(
         .target(name: "SSHAgentCore", dependencies: ["GlasshouseSecurity"]),
         // Liquid Glass chrome helpers with Reduce Transparency / Increase Contrast fallbacks, APCA contrast.
         .target(name: "DesignSystem"),
+        // Managed ~/.ssh/glasshouse.conf for Secure Enclave keys: validated hosts, the Include in ~/.ssh/config,
+        // key discovery and setup scripts. Foundation only, so its tests also run on Linux.
+        .target(name: "SSHConfig"),
 
         .testTarget(name: "SSHAgentCoreTests", dependencies: ["SSHAgentCore"]),
         .testTarget(name: "ShellIntegrationTests", dependencies: ["ShellIntegration"]),
         .testTarget(name: "DesignSystemTests", dependencies: ["DesignSystem"]),
+        .testTarget(name: "SSHConfigTests", dependencies: ["SSHConfig"], resources: [.copy("Fixtures")]),
     ],
     swiftLanguageModes: [.v6]
 )

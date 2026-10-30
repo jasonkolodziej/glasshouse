@@ -69,11 +69,12 @@ Sources/
   GlasshouseSecurity/            Foreground-process inspection, Secure Keyboard Entry, Touch ID sudo + native SE SSH setup
   SSHAgentCore/                  RFC 9987 agent: wire format, Secure Enclave key store, BSD-socket server, peer identity
   DesignSystem/                  glassChrome() + accessible fallbacks, APCA contrast floor, TrustCapsule, tokens
+  SSHConfig/                     ~/.ssh/glasshouse.conf hosts, the Include in ~/.ssh/config, SE key discovery, scripts
 Apps/
   Glasshouse/                    SwiftUI app: workspace, tabs, pane overlays, palette, approval card, settings
     GlasshouseIcons.xcassets/    app icon candidates AppIconA/B/C (see App icon)
   GlasshouseAgent/               LSUIElement login item serving Secure Enclave keys (opt-in)
-Tests/                           swift-testing suites
+Tests/                           swift-testing suites (SSHConfigTests is Foundation-only and also runs on Linux)
 project.yml                      XcodeGen spec (bundle layout, entitlements, signing)
 ```
 
@@ -219,39 +220,109 @@ sequenceDiagram
 Apple's `sc_auth` creates a P-256 key inside the Secure Enclave. The key can't be exported and needs Touch ID for every
 use. OpenSSH reaches it through `/usr/lib/ssh-keychain.dylib` as an `sk-ecdsa-sha2-nistp256@openssh.com` key.
 
+Glasshouse keeps the hosts that use these keys in its own file, `~/.ssh/glasshouse.conf`. Settings generates that file
+from its host list (saved in `~/Library/Application Support/Glasshouse/ssh-hosts.json`), and `~/.ssh/config` pulls it in
+with this block at the very top:
+
+```
+# >>> glasshouse >>>
+# Managed by Glasshouse (Settings › SSH Keys). Keep this block above every Host and Match line.
+Include ~/.ssh/glasshouse.conf
+# <<< glasshouse <<<
+```
+
 **Set up:**
 
 1. Open **Settings › SSH Keys**. **Secure Enclave provider** should read **Available**.
-2. Click **Create Secure Enclave Key in New Tab…** and press Return. The script:
-   1. runs `sc_auth create-ctk-identity -l glasshouse -k p-256-ne -t bio`, which asks for Touch ID;
-   2. runs `ssh-keygen -w /usr/lib/ssh-keychain.dylib -K -N ""` in a temporary folder to download the key *handle*,
+2. Create a key. Type a name in **New key name** (`glasshouse` by default), click **Create Key in New Tab…** and press
+   Return. The script:
+   1. stops if `~/.ssh/NAME` already exists, so it never overwrites a key;
+   2. runs `sc_auth create-ctk-identity -l NAME -k p-256-ne -t bio`, which asks for Touch ID;
+   3. runs `ssh-keygen -w /usr/lib/ssh-keychain.dylib -K -N ""` in a temporary folder to download the key *handle*,
       which contains no secret. If it asks for a PIN, press Return;
-   3. moves the handle to `~/.ssh/glasshouse` and `~/.ssh/glasshouse.pub` (mode 0600) and prints the public key.
-3. Add the public key to the server's `~/.ssh/authorized_keys`, or to GitHub or GitLab as an SSH key. Servers need
-   OpenSSH 8.2 or later.
-4. Add the host to `~/.ssh/config`:
+   4. moves the handle to `~/.ssh/NAME` and `~/.ssh/NAME.pub` (mode 0600) and prints the public key.
+
+   Back in Settings, click **Refresh**. The key appears under **Built-in**.
+3. Under **Hosts**, click **Add Include to ~/.ssh/config**. Glasshouse adds the block above at the top of the file
+   and keeps the original as `~/.ssh/config.glasshouse-backup`. If `~/.ssh/config` is a symlink, for example from a
+   dotfiles manager, Glasshouse writes through it.
+4. Click **Add Host…** and fill in the alias you'll type after `ssh`, the host name or IP address, and optionally a user
+   and a port. Pick the key. Glasshouse writes this to `~/.ssh/glasshouse.conf`:
 
    ```
    Host myserver
-       HostName myserver.example.com
+       HostName 10.0.0.5
        User you
+       Port 22
        IdentityFile ~/.ssh/glasshouse
        SecurityKeyProvider /usr/lib/ssh-keychain.dylib
        IdentitiesOnly yes
+       IdentityAgent none
+       PubkeyAcceptedAlgorithms sk-ecdsa-sha2-nistp256@openssh.com
        ForwardAgent no
    ```
 
-   Glasshouse tabs already set `SSH_SK_PROVIDER`, so `ssh` inside Glasshouse finds the provider without the
-   `SecurityKeyProvider` line. The line makes the key work from other terminals and from Git.
-5. Test with `ssh myserver`, or `ssh -T git@github.com`. You should get one system Touch ID dialog.
-6. Register a second key, from another Mac or a hardware security key, as a backup. Secure Enclave keys can't be
+5. Click **Install Key…** next to the host. A tab opens with a script that:
+   1. checks with `ssh -G` that Glasshouse's entry is in effect, and stops if it isn't;
+   2. runs `ssh-copy-id`, which logs in the way you do today (password or another key) and appends the public key to
+      `~/.ssh/authorized_keys` on the server. Three `-o` options undo the entry's restrictions for this one command:
+      `IdentityAgent=SSH_AUTH_SOCK`, `IdentitiesOnly=no` and `PubkeyAcceptedAlgorithms=+sk-ecdsa-…`;
+   3. logs in again with only the new key. This one must ask for Touch ID.
+
+   For GitHub or GitLab there's no server to install on: click **Copy Public Key** and paste it into their SSH key
+   settings, as an **Authentication Key**.
+6. Log in with `ssh myserver`, or click **Connect**. Every login shows one system Touch ID dialog.
+7. Register a second key, from another Mac or a hardware security key, as a backup. Secure Enclave keys can't be
    backed up, so losing this Mac means losing this key.
+
+**Why the entry needs `IdentityAgent none` and `PubkeyAcceptedAlgorithms`:** without them, `ssh myserver` can log in
+without ever asking for Touch ID. Two OpenSSH rules combine:
+
+- `IdentityFile` lines add up across every `Host` block that matches, unlike most options, where the first value wins.
+  A `Host *` block's keys therefore apply to `myserver` too, whatever order the blocks are in.
+- Keys already in `ssh-agent` are offered before key files. With `AddKeysToAgent yes` and `UseKeychain yes`, your
+  everyday key is usually there, so it's offered first. If the server accepts it, ssh never reaches the Touch ID key.
+
+`IdentityAgent none` stops agent keys being offered, and `PubkeyAcceptedAlgorithms` makes ssh skip every key that
+isn't a Secure Enclave key (`ssh -v` shows "Skipping … not in PubkeyAcceptedAlgorithms"). The `Include` has to come first
+because for these options ssh keeps the first value it reads.
+
+**Other blocks for the same alias:** if `~/.ssh/config` has its own `Host myserver` block, Settings shows a warning
+with its line number. Glasshouse's entry is read first, so its host, user, port and key win, but that block's other
+settings still apply. Remove it if it's left over.
+
+**Without Glasshouse's Settings:** put the same `Host` block in `~/.ssh/config` *above* any `Host *` block, or in a file
+included from the top.
 
 **Notes:**
 
-- The button always names the key `glasshouse`. To make a second key on the same Mac, rename the existing
-  `~/.ssh/glasshouse` files first.
+- Removing a host in Settings removes it from `~/.ssh/glasshouse.conf` only. Its key stays in the server's
+  `authorized_keys`.
 - To list or remove Secure Enclave identities, see `man sc_auth` (`list-ctk-identities`, `delete-ctk-identity`).
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant S as Settings
+    participant T as New Glasshouse tab
+    participant SSH as ssh and ssh-copy-id
+    participant Srv as Server
+    You->>S: Install Key… next to myserver
+    S->>T: Open a tab with the install script
+    T->>SSH: ssh -G myserver
+    alt Glasshouse entry not in effect
+        SSH-->>T: PubkeyAcceptedAlgorithms is not limited to the Secure Enclave key
+        T->>You: Stop and ask for the Include in ~/.ssh/config
+    else Entry in effect
+        T->>SSH: ssh-copy-id with options that restore your usual login
+        SSH->>Srv: Log in with your password or existing key
+        SSH->>Srv: Append the public key to authorized_keys
+        T->>SSH: ssh myserver true
+        SSH->>Srv: Offer only the Secure Enclave key
+        SSH->>You: System Touch ID dialog
+        Srv-->>T: Logged in, so Touch ID login works
+    end
+```
 
 ```mermaid
 sequenceDiagram
@@ -261,6 +332,7 @@ sequenceDiagram
     participant SE as Secure Enclave
     participant Srv as Server
     You->>SSH: ssh myserver
+    Note over SSH: Glasshouse entry read first.<br/>Agent keys and non-Secure Enclave keys are skipped.
     SSH->>Srv: Connect and offer the public key from ~/.ssh/glasshouse.pub
     Srv-->>SSH: Key is authorized, prove you hold it
     SSH->>P: Sign with the key handle in ~/.ssh/glasshouse
@@ -368,12 +440,16 @@ flowchart TD
 - **Agent rules:** the agent enforces allowed hosts and forwarding per key, but Settings has no controls for them. New
   keys accept any destination and refuse forwarded requests.
 - **Agent key deletion:** deleting a key has no confirmation, and can't be undone.
-- **Built-in key:** the key name is fixed at `glasshouse`, and there's no button to add the `~/.ssh/config` block.
+- **Several built-in keys:** `ssh-keygen -K` downloads every Secure Enclave key at once, and with more than one the
+  handle files can get duplicate names (FB21992630). After creating a second key, check with
+  `ssh-keygen -lf ~/.ssh/NAME.pub` that its fingerprint differs from your other keys'.
 
 ### Troubleshooting
 
 | Symptom | Likely cause and fix |
 | --- | --- |
+| `ssh myserver` logs in without asking for Touch ID | Glasshouse's entry isn't in effect, so another key logged in, usually one from `Host *` that `ssh-agent` holds. **Settings › SSH Keys › Hosts** should show the Include as in effect. `ssh -G myserver \| grep -i pubkeyaccepted` should print only `sk-ecdsa-sha2-nistp256@openssh.com`. `ssh -v myserver` shows which key logged in. |
+| **Install Key…** is greyed out, or the script says the settings "are not in effect" | Click **Add Include to ~/.ssh/config** (or **Move It to the Top**) under **Hosts**. |
 | A setup button does nothing | No Glasshouse window has been focused yet. Click into a terminal tab, then try again. |
 | Status still reads "Not set up" after setup | Click **Refresh**. Check with `cat /etc/pam.d/sudo_local`. |
 | Orange warning about `pam_reattach` | `sudo_local` loads `pam_reattach` from a user-writable path such as `/opt/homebrew`, which lets any process running as you gain root. Re-run setup with the tmux option ticked. |
@@ -451,6 +527,16 @@ ssh-keygen -lf ~/.ssh/glasshouse.pub
 
 You install the **public** key in the server's `~/.ssh/authorized_keys`. The private key stays in the Secure Enclave, so there's nothing secret to copy.
 
+> [!NOTE]
+> For a host in **Settings › SSH Keys › Hosts**, click **Install Key…**: it does all of this for you. By hand,
+> `ssh-copy-id myserver` fails for such a host, because Glasshouse's entry only offers the Touch ID key, which the
+> server doesn't know yet. Add the options that restore your usual login for that one command:
+>
+> ```sh
+> ssh-copy-id -f -i ~/.ssh/glasshouse.pub -o IdentityAgent=SSH_AUTH_SOCK -o IdentitiesOnly=no \
+>   -o PubkeyAcceptedAlgorithms=+sk-ecdsa-sha2-nistp256@openssh.com myserver
+> ```
+
 #### Copy the public key to the server
 
 The usual way, from your Mac:
@@ -481,13 +567,16 @@ If you have no login on the server yet, paste the contents of `glasshouse.pub` a
 #### Test it before relying on it
 
 ```sh
-ssh -i ~/.ssh/glasshouse -o IdentitiesOnly=yes \
+ssh -i ~/.ssh/glasshouse -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o PubkeyAcceptedAlgorithms=sk-ecdsa-sha2-nistp256@openssh.com \
     -o SecurityKeyProvider=/usr/lib/ssh-keychain.dylib you@server
 ```
 
 You should get one Touch ID prompt and then a shell. Inside a Glasshouse tab you can leave out the `SecurityKeyProvider` option, because Glasshouse already sets it in its tabs.
 
-**3. Make it permanent:** add the host block to `~/.ssh/config` (it's in the README under "SSH, option 1"), and from then on `ssh myserver` is enough.
+Keep the `IdentityAgent` and `PubkeyAcceptedAlgorithms` options. Without them, a key from `Host *` that `ssh-agent` holds is offered first, and the test can log in without Touch ID. See [why the entry needs them](#ssh-option-1-built-in-secure-enclave-key-recommended).
+
+**Make it permanent:** add the host in **Settings › SSH Keys › Hosts › Add Host…**, and from then on `ssh myserver` is enough.
 
 **Notes:**
 
@@ -503,6 +592,5 @@ You should get one Touch ID prompt and then a shell. Inside a Glasshouse tab you
   - Find bar search wiring and real scrollback clear.
   - Splits; session restore; AppleScript dictionary; App Intents.
   - Paste-confirmation sheet; OSC 52 read prompt.
-  - SSH settings: per-key allowed hosts and forwarding controls for the agent, a delete confirmation, a key-name field
-    for the built-in key, and a button that adds the `~/.ssh/config` block.
+  - SSH settings: per-key allowed hosts and forwarding controls for the agent, and a delete confirmation for agent keys.
 - **Engine:** a libghostty adapter behind `TerminalEngine`, once libghostty ships a stable C API.

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SSHConfig
 
 struct SSHHost: Identifiable, Hashable {
     var id: String { alias }
@@ -28,15 +29,9 @@ final class SSHHostCatalog {
         }
     }
 
+    /// Aliases from ~/.ssh/config and the files it includes, Glasshouse's ~/.ssh/glasshouse.conf among them.
     nonisolated static func aliases() -> [String] {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config")
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        // Top-level file only; `ssh -G` follows Include for each alias. TODO: walk Include'd files for aliases.
-        return text.split(separator: "\n").flatMap { line -> [String] in
-            let parts = line.trimmingCharacters(in: .whitespaces).split(whereSeparator: \.isWhitespace)
-            guard parts.first?.lowercased() == "host" else { return [] }
-            return parts.dropFirst().map(String.init).filter { !$0.contains("*") && !$0.contains("?") && !$0.hasPrefix("!") }
-        }
+        SSHConfigStore.standard().hostAliases()
     }
 
     nonisolated static func resolve(_ alias: String) -> SSHHost? {

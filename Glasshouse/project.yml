@@ -43,6 +43,8 @@ targets:
         product: SSHAgentCore
       - package: GlasshouseKit
         product: DesignSystem
+      - package: GlasshouseKit
+        product: SSHConfig
       - target: GlasshouseAgent
         embed: true
         codeSign: true
@@ -108,3 +110,4 @@ schemes:
         - package: GlasshouseKit/SSHAgentCoreTests
         - package: GlasshouseKit/ShellIntegrationTests
         - package: GlasshouseKit/DesignSystemTests
+        - package: GlasshouseKit/SSHConfigTests

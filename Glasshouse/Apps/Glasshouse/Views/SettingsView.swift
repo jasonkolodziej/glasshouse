@@ -2,17 +2,26 @@ import DesignSystem
 import GlasshouseSecurity
 import ServiceManagement
 import SSHAgentCore
+import SSHConfig
 import SwiftUI
+
+/// Which Settings pane is showing. Stored so other views (the command palette) can open a specific one.
+enum SettingsPane: String {
+    case security, ssh, appearance
+    static let storageKey = "settingsPane"
+}
 
 /// Settings split into three short panes (critique of Terminal.app's six-sub-pane profile editor).
 struct SettingsView: View {
+    @AppStorage(SettingsPane.storageKey) private var pane: SettingsPane = .security
+
     var body: some View {
-        TabView {
-            Tab("Security", systemImage: "touchid") { SecuritySettings() }
-            Tab("SSH Keys", systemImage: "key.horizontal") { SSHSettings() }
-            Tab("Appearance", systemImage: "paintbrush") { AppearanceSettings() }
+        TabView(selection: $pane) {
+            Tab("Security", systemImage: "touchid", value: .security) { SecuritySettings() }
+            Tab("SSH Keys", systemImage: "key.horizontal", value: .ssh) { SSHSettings() }
+            Tab("Appearance", systemImage: "paintbrush", value: .appearance) { AppearanceSettings() }
         }
-        .frame(width: 560, height: 440)
+        .frame(width: 620, height: 560)
     }
 }
 
@@ -83,6 +92,16 @@ private struct SSHSettings: View {
     @State private var strictBiometry = false
     @State private var error: String?
 
+    // Built-in Secure Enclave keys and the hosts in ~/.ssh/glasshouse.conf.
+    private let sshStore = SSHConfigStore.standard()
+    @State private var seKeys: [SSHKeyFile] = []
+    @State private var managed = ManagedSSHConfig()
+    @State private var includeStatus: SSHIncludeStatus = .active
+    @State private var conflicts: [SSHConfigConflict] = []
+    @State private var newKeyName = "glasshouse"
+    @State private var editing: HostDraft?
+    @State private var sshError: String?
+
     private var store: SecureEnclaveKeyStore { .init(accessGroup: AgentConfiguration.keychainAccessGroup) }
     private var agent: SMAppService { .loginItem(identifier: AgentConfiguration.loginItemIdentifier) }
 
@@ -93,13 +112,46 @@ private struct SSHSettings: View {
                     Text(NativeSecureEnclaveSSH.isAvailable ? "Available" : "Not found")
                         .foregroundStyle(NativeSecureEnclaveSSH.isAvailable ? .green : .secondary)
                 }
-                Button("Create Secure Enclave Key in New Tab…") {
-                    requestVisibleScript(title: "SSH key setup",
-                                         script: NativeSecureEnclaveSSH.createKeyScript(label: "glasshouse"))
+                ForEach(seKeys) { key in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("~/.ssh/\(key.name)")
+                            let users = managed.hosts(usingKey: key.name).map(\.alias)
+                            Text(users.isEmpty ? key.comment : "\(key.comment) · \(users.joined(separator: ", "))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Copy Public Key") { copy(key.publicKey) }
+                    }
                 }
-                .disabled(!NativeSecureEnclaveSSH.isAvailable)
+                HStack {
+                    TextField("New key name", text: $newKeyName)
+                    Button("Create Key in New Tab…") { createSecureEnclaveKey() }
+                        .disabled(!NativeSecureEnclaveSSH.isAvailable || !canCreateKey)
+                }
                 Text("Apple's sc_auth + /usr/lib/ssh-keychain.dylib. No Glasshouse code in the signing path. Servers need OpenSSH ≥ 8.2 (sk- keys). Register a second recovery key: Secure Enclave keys can't be backed up.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Hosts") {
+                includeStatusRow
+                ForEach(conflicts) { conflict in
+                    Label("~/.ssh/config line \(conflict.line) also defines “\(conflict.alias)”. Glasshouse's entry is read first, so its host, user, port and key win, but that block's other settings still apply. Remove it if it's left over.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                ForEach(managed.hosts) { host in hostRow(host) }
+                HStack {
+                    Button("Add Host…") {
+                        editing = HostDraft(keyName: seKeys.first?.name ?? newKeyName)
+                    }
+                    .disabled(seKeys.isEmpty)
+                    Spacer()
+                    Button("Refresh") { reloadSSH() }
+                }
+                Text("Hosts are written to ~/.ssh/glasshouse.conf. Each one signs only with its Secure Enclave key, so every login asks for Touch ID, even when other keys in ~/.ssh/config or ssh-agent would work.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let sshError { Text(sshError).foregroundStyle(.red).font(.caption) }
             }
 
             Section("Glasshouse Agent (optional)") {
@@ -132,8 +184,137 @@ private struct SSHSettings: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear(perform: reload)
+        .onAppear { reload(); reloadSSH() }
+        .sheet(item: $editing) { draft in
+            HostEditor(draft: draft, keys: seKeys.map(\.name), save: saveHost)
+        }
     }
+
+    // MARK: Built-in keys and hosts
+
+    private var canCreateKey: Bool {
+        ManagedSSHHost.isValidKeyName(newKeyName) && !seKeys.contains { $0.name == newKeyName }
+    }
+
+    @ViewBuilder private var includeStatusRow: some View {
+        switch includeStatus {
+        case .active:
+            Label("~/.ssh/config includes ~/.ssh/glasshouse.conf", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .missing:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("~/.ssh/config doesn't include Glasshouse's hosts yet, so ssh ignores them.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Button("Add Include to ~/.ssh/config") { installInclude() }
+                Text("Adds a four-line block at the top of the file. The original is kept as ~/.ssh/config.glasshouse-backup.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .inactive(let line):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("The Include on line \(line) of ~/.ssh/config comes after a Host or Match line, so it only applies inside that block.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Button("Move It to the Top") { installInclude() }
+            }
+        }
+    }
+
+    private func hostRow(_ host: ManagedSSHHost) -> some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(host.alias)
+                Text("\(host.user.map { "\($0)@" } ?? "")\(host.hostName)\(host.port.map { ":\($0)" } ?? "") · ~/.ssh/\(host.keyName)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Install Key…") { installKey(on: host) }
+                .disabled(includeStatus != .active)
+                .help(includeStatus == .active
+                      ? "Adds the public key to authorized_keys on the server, then tests a Touch ID login"
+                      : "Add the Include to ~/.ssh/config first")
+            Button("Connect") {
+                Workspace.frontmost?.openHost(SSHHost(alias: host.alias))
+                NSApp.activate()
+            }
+            Menu {
+                Button("Edit…") { editing = HostDraft(host) }
+                Button("Remove from Glasshouse", role: .destructive) { removeHost(host) }
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.button).buttonStyle(.borderless).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel("More actions for \(host.alias)")
+        }
+    }
+
+    private func reloadSSH() {
+        seKeys = sshStore.secureEnclaveKeys()
+        do {
+            managed = try sshStore.load()
+            sshError = nil
+        } catch {
+            sshError = "Couldn't read \(sshStore.storeURL.path): \(error.localizedDescription)"
+        }
+        includeStatus = sshStore.includeStatus()
+        conflicts = sshStore.conflicts(for: managed)
+        if seKeys.contains(where: { $0.name == newKeyName }) {
+            newKeyName = Self.freeKeyName(taken: Set(seKeys.map(\.name)))
+        }
+    }
+
+    /// "glasshouse", then "glasshouse-2", "glasshouse-3", …
+    private static func freeKeyName(taken: Set<String>) -> String {
+        if !taken.contains("glasshouse") { return "glasshouse" }
+        return (2...).lazy.map { "glasshouse-\($0)" }.first { !taken.contains($0) }!
+    }
+
+    private func createSecureEnclaveKey() {
+        do {
+            requestVisibleScript(title: "SSH key setup",
+                                 script: try GlasshouseSSHScripts.createSecureEnclaveKey(name: newKeyName))
+            sshError = nil
+        } catch { sshError = error.localizedDescription }
+    }
+
+    private func installInclude() {
+        do { try sshStore.installInclude() } catch { sshError = "~/.ssh/config: \(error.localizedDescription)" }
+        reloadSSH()
+    }
+
+    private func saveHost(_ draft: HostDraft) throws {
+        let portText = draft.port.trimmingCharacters(in: .whitespaces)
+        let port: Int? = portText.isEmpty ? nil : (Int(portText) ?? -1)   // -1 is reported as out of range
+        var config = try sshStore.load()
+        try config.upsert(ManagedSSHHost(alias: draft.alias, hostName: draft.hostName, user: draft.user,
+                                         port: port, keyName: draft.keyName),
+                          replacing: draft.original)
+        try sshStore.save(config)
+        reloadSSH()
+        Workspace.frontmost?.hosts.reload()
+    }
+
+    private func removeHost(_ host: ManagedSSHHost) {
+        do {
+            var config = try sshStore.load()
+            config.remove(alias: host.alias)
+            try sshStore.save(config)
+        } catch { sshError = error.localizedDescription }
+        reloadSSH()
+        Workspace.frontmost?.hosts.reload()
+    }
+
+    private func installKey(on host: ManagedSSHHost) {
+        do {
+            requestVisibleScript(title: "Install key on \(host.alias)",
+                                 script: try GlasshouseSSHScripts.installKey(on: host))
+        } catch { sshError = error.localizedDescription }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    // MARK: Glasshouse Agent
 
     private func reload() {
         keys = (try? store.listKeys()) ?? []
@@ -160,9 +341,66 @@ private struct SSHSettings: View {
     }
 
     private func copyPublicKey(_ key: AgentKey) {
-        let line = "\(SSHKeyFormat.ecdsaP256) \(key.publicKeyBlob.base64EncodedString()) \(key.comment)"
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(line, forType: .string)
+        copy("\(SSHKeyFormat.ecdsaP256) \(key.publicKeyBlob.base64EncodedString()) \(key.comment)")
+    }
+}
+
+/// The host sheet's fields as typed. `original` is the alias being edited, or nil for a new host.
+private struct HostDraft: Identifiable {
+    let id = UUID()
+    var original: String?
+    var alias = ""
+    var hostName = ""
+    var user = ""
+    var port = ""
+    var keyName: String
+
+    init(keyName: String) { self.keyName = keyName }
+
+    init(_ host: ManagedSSHHost) {
+        original = host.alias
+        alias = host.alias
+        hostName = host.hostName
+        user = host.user ?? ""
+        port = host.port.map(String.init) ?? ""
+        keyName = host.keyName
+    }
+}
+
+private struct HostEditor: View {
+    @State var draft: HostDraft
+    let keys: [String]
+    let save: @MainActor (HostDraft) throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Form {
+                TextField("Alias", text: $draft.alias, prompt: Text("myserver"))
+                TextField("Host name or IP address", text: $draft.hostName, prompt: Text("myserver.example.com"))
+                TextField("User", text: $draft.user, prompt: Text("Optional"))
+                TextField("Port", text: $draft.port, prompt: Text("22"))
+                Picker("Key", selection: $draft.keyName) {
+                    ForEach(keys, id: \.self) { Text("~/.ssh/\($0)").tag($0) }
+                }
+                Text("You type the alias after ssh, as in “ssh \(draft.alias.isEmpty ? "myserver" : draft.alias)”.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(draft.original == nil ? "Add Host" : "Save") {
+                    do { try save(draft); dismiss() } catch { self.error = error.localizedDescription }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+        }
+        .frame(width: 440)
     }
 }
 

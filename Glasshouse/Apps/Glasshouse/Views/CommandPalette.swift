@@ -6,6 +6,8 @@ import SwiftUI
 /// that wins regardless of category, and the shortcut shown on every row so users learn it.
 struct CommandPalette: View {
     @Bindable var workspace: Workspace
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage(SettingsPane.storageKey) private var settingsPane: SettingsPane = .security
     @State private var query = ""
     @State private var selection = 0
     @FocusState private var focused: Bool
@@ -66,10 +68,10 @@ struct CommandPalette: View {
                  symbol: "touchid", shortcut: nil, kind: "Security") {
                 workspace.runVisibleScript(title: "Touch ID setup",
                                            script: TouchIDSudo.setupScript(includeReattach: false)) },
-            Item(title: "Create Secure Enclave SSH Key…", subtitle: "sc_auth + ssh-keychain.dylib",
+            Item(title: "Manage SSH Keys and Hosts…", subtitle: "Secure Enclave keys that ask for Touch ID",
                  symbol: "key.horizontal", shortcut: nil, kind: "Security") {
-                workspace.runVisibleScript(title: "SSH key setup",
-                                           script: NativeSecureEnclaveSSH.createKeyScript(label: "glasshouse")) },
+                settingsPane = .ssh
+                openSettings() },
         ]
         items += workspace.hosts.hosts.map { host in
             Item(title: host.alias,
