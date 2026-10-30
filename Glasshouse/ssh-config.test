@@ -12,6 +12,14 @@ Host *
 Host myserver
     HostName <ip-address>
     User you
+    IdentityFile ~/.ssh/glasshouse
+    SecurityKeyProvider /usr/lib/ssh-keychain.dylib
+    IdentitiesOnly yes
+    ForwardAgent no
+
+Host myserver
+    HostName <ip-address>
+    User you
     Port 22
     IdentityFile ~/.ssh/id_someID
 
@@ -20,3 +28,5 @@ Host myserver.local
     User you
     Port 22
     IdentityFile ~/.ssh/id_someID
+
+
