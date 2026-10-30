@@ -44,12 +44,14 @@ xcodebuild -project Glasshouse.xcodeproj -scheme Glasshouse ASSETCATALOG_COMPILE
 ```
 
 **If the Dock or Finder still shows the old icon** (macOS caches icons aggressively):
+
 1. Clean the build folder (⇧⌘K) and delete the app from DerivedData.
 2. Run `killall Dock`.
 3. If Finder is still stale, `touch` the built `Glasshouse.app`.
 
 **Liquid Glass on macOS 26:** these PNG sets work on Tahoe, but Tahoe draws the full Liquid Glass treatment (specular
 edges, tinted and clear modes) only from an Icon Composer `.icon` file. Once an icon is chosen:
+
 1. Open that set's `icon_512x512@2x.png` (the 1024 px master) in Icon Composer.
 2. Split it into layers: background, glyph and glass pane.
 3. Save the `.icon` file in `Apps/Glasshouse/`.
@@ -87,14 +89,14 @@ plus one fix that runs process teardown at the I/O threads' priority, so closing
 The fix has been sent upstream; switch back to `migueldeicaza/SwiftTerm` once a release includes it.
 
 1.99 rebuilt SwiftTerm's input/output pipeline, so its API changed:
+
 - `getTerminal()` and the public `terminal` property are gone.
 - Output now goes to an internal adapter. `dataReceived(slice:)` can still be overridden, but it is **never called**, so an override would compile and silently do nothing.
-
 
 ## Layer model
 
 | Layer | What | Material |
-|---|---|---|
+| --- | --- | --- |
 | L1 content | terminal grid, command gutter, sticky header | **opaque** (translucency is opt-in, Regular glass only, forced off by Reduce Transparency / Increase Contrast) |
 | L2 controls | toolbar + tab strip, sidebar, find bar | system Liquid Glass |
 | L3 transient | command palette, Touch ID approval card | glass + dimming via `glassChrome(.transient)` |
@@ -107,7 +109,7 @@ and the default SSH keys use Apple's own components. Glasshouse sets them up in 
 around them. The optional Glasshouse Agent is the only Glasshouse code that signs anything.
 
 | | Touch ID for `sudo` | SSH: built-in key (recommended) | SSH: Glasshouse Agent (optional) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | What shows the Touch ID prompt | `pam_tid` (system dialog) | `/usr/lib/ssh-keychain.dylib` (system dialog) | Glasshouse Agent; the prompt names the host, key and process |
 | Glasshouse code in the authentication path | none | none | the agent |
 | Needs `DEVELOPMENT_TEAM` | no | no | yes |
@@ -151,6 +153,7 @@ sequenceDiagram
 ### Touch ID for `sudo`
 
 **Set up:**
+
 1. Open **Settings › Security**.
 2. If you use tmux or screen, tick **I use tmux or screen**. Touch ID can't reach the screen from inside those
    programs without `pam_reattach`.
@@ -217,6 +220,7 @@ Apple's `sc_auth` creates a P-256 key inside the Secure Enclave. The key can't b
 use. OpenSSH reaches it through `/usr/lib/ssh-keychain.dylib` as an `sk-ecdsa-sha2-nistp256@openssh.com` key.
 
 **Set up:**
+
 1. Open **Settings › SSH Keys**. **Secure Enclave provider** should read **Available**.
 2. Click **Create Secure Enclave Key in New Tab…** and press Return. The script:
    1. runs `sc_auth create-ctk-identity -l glasshouse -k p-256-ne -t bio`, which asks for Touch ID;
@@ -226,6 +230,7 @@ use. OpenSSH reaches it through `/usr/lib/ssh-keychain.dylib` as an `sk-ecdsa-sh
 3. Add the public key to the server's `~/.ssh/authorized_keys`, or to GitHub or GitLab as an SSH key. Servers need
    OpenSSH 8.2 or later.
 4. Add the host to `~/.ssh/config`:
+
    ```
    Host myserver
        HostName myserver.example.com
@@ -235,6 +240,7 @@ use. OpenSSH reaches it through `/usr/lib/ssh-keychain.dylib` as an `sk-ecdsa-sh
        IdentitiesOnly yes
        ForwardAgent no
    ```
+
    Glasshouse tabs already set `SSH_SK_PROVIDER`, so `ssh` inside Glasshouse finds the provider without the
    `SecurityKeyProvider` line. The line makes the key work from other terminals and from Git.
 5. Test with `ssh myserver`, or `ssh -T git@github.com`. You should get one system Touch ID dialog.
@@ -242,6 +248,7 @@ use. OpenSSH reaches it through `/usr/lib/ssh-keychain.dylib` as an `sk-ecdsa-sh
    backed up, so losing this Mac means losing this key.
 
 **Notes:**
+
 - The button always names the key `glasshouse`. To make a second key on the same Mac, rename the existing
   `~/.ssh/glasshouse` files first.
 - To list or remove Secure Enclave identities, see `man sc_auth` (`list-ctk-identities`, `delete-ctk-identity`).
@@ -274,6 +281,7 @@ requesting process, or when a server rejects `sk-` keys: the agent's keys are pl
 one at a time with `IdentityAgent`. Glasshouse never sets `SSH_AUTH_SOCK` globally.
 
 **Set up:**
+
 1. Set `DEVELOPMENT_TEAM` (see [Before you start](#before-you-start)), regenerate and rebuild.
 2. Open **Settings › SSH Keys** and turn on **Run Glasshouse Agent at login**. If **Approve in System Settings…**
    appears, click it and turn on Glasshouse Agent under **General › Login Items**.
@@ -282,6 +290,7 @@ one at a time with `IdentityAgent`. Glasshouse never sets `SSH_AUTH_SOCK` global
    - **Not strict:** Touch ID, Apple Watch or your login password.
 4. Click **Copy Public Key** and add it to the server.
 5. Point the host at the agent in `~/.ssh/config`:
+
    ```
    Host myserver
        HostName myserver.example.com
@@ -290,10 +299,12 @@ one at a time with `IdentityAgent`. Glasshouse never sets `SSH_AUTH_SOCK` global
        IdentitiesOnly yes
        ForwardAgent no
    ```
+
 6. Test with `ssh myserver`. The Touch ID prompt should read something like "sign in to you@myserver with key
    “you@mac” for ssh [pid 1234]".
 
 **What the agent checks before each signature:**
+
 - It identifies the connecting process from the kernel (its PID, code signature and command line).
 - It refuses a request that arrives through agent forwarding unless the key allows forwarding.
 - It refuses a destination that isn't on the key's allowed-hosts list, when that list isn't empty.
@@ -362,7 +373,7 @@ flowchart TD
 ### Troubleshooting
 
 | Symptom | Likely cause and fix |
-|---|---|
+| --- | --- |
 | A setup button does nothing | No Glasshouse window has been focused yet. Click into a terminal tab, then try again. |
 | Status still reads "Not set up" after setup | Click **Refresh**. Check with `cat /etc/pam.d/sudo_local`. |
 | Orange warning about `pam_reattach` | `sudo_local` loads `pam_reattach` from a user-writable path such as `/opt/homebrew`, which lets any process running as you gain root. Re-run setup with the tmux option ticked. |
@@ -376,7 +387,7 @@ flowchart TD
 ## Design critique → code
 
 | Critique item | Where it landed |
-|---|---|
+| --- | --- |
 | U1 ⌘K collision | `GlasshouseCommands`: ⌘K = clear (Terminal.app), hosts = ⇧⌘O, palette = ⇧⌘P |
 | U2 card placement | `TerminalPane`: card anchored bottom, by the cursor, with a "Waiting for Touch ID…" phase |
 | U3 hidden pane | `Notifier.approvalWaiting` when the pane isn't visible and key |
@@ -399,6 +410,42 @@ These were not checked against source or on a Mac. Each one is a quick prototype
 4. **`LOCAL_PEERTOKEN` = 0x006 and `SOL_LOCAL` = 0** in the macOS 26 SDK (`PeerIdentity.swift`).
 5. **macOS 26 SwiftUI APIs used:** `ToolbarSpacer` and `sharedBackgroundVisibility`, and `Glass.regular.tint(_:)`.
 6. **Native SE SSH quirks:** `ssh-keygen -K` prompts for a PIN (leave it blank); duplicate stub file names when you have several keys (FB21992630).
+
+## Helpful Commands
+
+### SSH Version Check
+
+> [!NOTE]
+> The version that matters is the server's (`sshd`): the built-in Secure Enclave key needs OpenSSH 8.2 or later on the server.
+
+**On the Ubuntu machine itself:**
+
+- **Client (`ssh`):** `ssh -V`. This prints something like `OpenSSH_9.6p1 Ubuntu-3ubuntu13.5, OpenSSL 3.0.13 30 Jan 2024`, written to stderr.
+- **Server (`sshd`):**
+
+  ```sh
+  dpkg -l openssh-server | tail -1
+  ```
+
+  `apt policy openssh-server` also works and shows the installed and available versions. On newer releases, `sudo sshd -V` prints the version directly.
+
+**From your Mac, without logging in:**
+
+```sh
+ssh -v myserver 2>&1 | grep "remote software version"
+# debug1: Remote protocol version 2.0, remote software version OpenSSH_9.6p1 Ubuntu-3ubuntu13.5
+```
+
+`nc myserver 22` also works: it prints the server's version banner straight away. Press Ctrl-C to close it.
+
+Any Ubuntu release from 20.04 on ships OpenSSH 8.2 or later, so it accepts `sk-ecdsa` keys.
+
+### SHA of Public Key
+
+```bash
+ssh-keygen -lf ~/.ssh/glasshouse.pub
+# 256 SHA256:Xb3k…qY0 you@mac (ECDSA-SK)
+```
 
 ## Not yet built (TODO markers in code)
 
