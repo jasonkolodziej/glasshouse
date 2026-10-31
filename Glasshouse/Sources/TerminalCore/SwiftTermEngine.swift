@@ -161,10 +161,27 @@ public final class SwiftTermEngine: NSObject, TerminalEngine {
         terminalView.nativeBackgroundColor = a.background.withAlphaComponent(a.backgroundOpacity)
         terminalView.caretColor = a.cursor
         terminalView.installColors(a.ansi.map(Self.swiftTermColor))
+        #if !SWIFTTERM_1
+        // Checked against 1.99.1; 1.20.x keeps its defaults for these.
+        terminalView.useBrightColors = a.boldIsBright
+        terminalView.caretTextColor = a.cursorText
+        terminalView.selectedTextBackgroundColor = a.selection ?? .selectedTextBackgroundColor
+        terminalView.setCursorStyle(Self.cursorStyle(a.cursorShape, blink: a.cursorBlink))
+        #endif
         // Glasshouse applies its own APCA floor (DesignSystem) to the palette; SwiftTerm 1.99.1's
         // WCAG-based `minimumContrastRatio` stays at its default (1 = off) to avoid double adjustment.
         terminalView.layer?.isOpaque = a.backgroundOpacity >= 1
     }
+
+    #if !SWIFTTERM_1
+    private static func cursorStyle(_ shape: TerminalCursorShape, blink: Bool) -> CursorStyle {
+        switch shape {
+        case .block: blink ? .blinkBlock : .steadyBlock
+        case .underline: blink ? .blinkUnderline : .steadyUnderline
+        case .bar: blink ? .blinkBar : .steadyBar
+        }
+    }
+    #endif
 
     private static func swiftTermColor(_ c: NSColor) -> SwiftTerm.Color {
         let rgb = c.usingColorSpace(.sRGB) ?? c

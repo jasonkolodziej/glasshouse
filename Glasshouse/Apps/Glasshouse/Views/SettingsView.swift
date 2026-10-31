@@ -20,9 +20,9 @@ struct SettingsView: View {
         TabView(selection: $pane) {
             Tab("Security", systemImage: "touchid", value: .security) { SecuritySettings() }
             Tab("SSH Keys", systemImage: "key.horizontal", value: .ssh) { SSHSettings() }
-            Tab("Appearance", systemImage: "paintbrush", value: .appearance) { AppearanceSettings() }
+            Tab("Appearance", systemImage: "paintbrush", value: .appearance) { AppearanceSettingsView() }
         }
-        .frame(width: 620, height: 560)
+        .frame(width: 680, height: 640)
     }
 }
 
@@ -480,38 +480,5 @@ private struct HostEditor: View {
                 draft.backupKeysText += "\n" + lines.joined(separator: "\n")
             }
         }
-    }
-}
-
-// MARK: - Appearance
-
-private struct AppearanceSettings: View {
-    @AppStorage("translucentGrid") private var translucentGrid = false
-    @AppStorage("themeFaithfulColors") private var themeFaithful = false
-    @AppStorage("fontSize") private var fontSize = 13.0
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    var body: some View {
-        Form {
-            Section("Text") {
-                Stepper("Font size: \(Int(fontSize)) pt", value: $fontSize, in: 9...32)
-                Toggle("Theme-faithful colors (lower ANSI contrast floor, Lc 45)", isOn: $themeFaithful)
-                Text("By default Glasshouse nudges ANSI colors to at least APCA Lc 60 and the default text to Lc 75 against the background. Increase Contrast raises both.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Window") {
-                Toggle("Translucent terminal background (Liquid Glass)", isOn: $translucentGrid)
-                    .disabled(reduceTransparency || contrast == .increased)
-                if reduceTransparency || contrast == .increased {
-                    Text("Unavailable while Reduce Transparency or Increase Contrast is on.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Off by default: glass is for controls, the terminal is content. When on, uses Regular glass only and keeps the contrast floor.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .formStyle(.grouped)
     }
 }

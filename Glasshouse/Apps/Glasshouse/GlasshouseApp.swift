@@ -14,6 +14,11 @@ struct GlasshouseApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands { GlasshouseCommands(workspace: workspace) }
 
+        WindowGroup("Theme Editor", id: ThemeEditorView.windowID, for: String.self) { $themeID in
+            ThemeEditorView(themeID: themeID ?? "")
+        }
+        .defaultSize(width: 980, height: 680)
+
         Settings { SettingsView() }
     }
 }

@@ -12,6 +12,7 @@ struct TerminalPane: View {
     @Bindable var session: TerminalSession
     @Bindable var workspace: Workspace
     @Environment(\.controlActiveState) private var activeState
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,8 +24,8 @@ struct TerminalPane: View {
             HStack(spacing: 0) {
                 TerminalHostView(engine: session.engine)
                     .accessibilityLabel("Terminal, \(session.title)")
-                    .padding(.leading, GH.Size.terminalPaddingLeading)
-                    .padding(.vertical, GH.Size.terminalPaddingVertical)
+                    .padding(.leading, session.appearance.paddingHorizontal)
+                    .padding(.vertical, session.appearance.paddingVertical)
                     .overlay(alignment: .top) { stickyHeader }
                 CommandGutter(session: session)
                     .frame(width: GH.Size.gutterWidth)
@@ -47,6 +48,7 @@ struct TerminalPane: View {
             if state == .key { Workspace.frontmost = workspace }
         }
         .onDisappear { session.isVisibleAndKey = false }
+        .onChange(of: colorScheme) { session.reloadAppearance() }   // Light/Dark Mode picks a different theme
     }
 
     @ViewBuilder private var stickyHeader: some View {

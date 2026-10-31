@@ -30,7 +30,8 @@ final class TerminalSession: Identifiable {
     var cwd: URL?
     var exited = false
     /// Colours the engine draws with; the pane paints its padding in the same background.
-    let appearance: TerminalAppearance
+    private(set) var appearance: TerminalAppearance
+    @ObservationIgnored private var appearanceObserver: NSObjectProtocol?
 
     private(set) var timeline = CommandTimeline()
     private(set) var trust: TrustState = .idle
@@ -60,6 +61,18 @@ final class TerminalSession: Identifiable {
         engine.apply(appearance)
         engine.onEvent = { [weak self] in self?.handle($0) }
         engine.start(launch)
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: ThemeLibrary.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadAppearance() }
+        }
+    }
+
+    /// Re-reads the theme: after a change in Settings or the theme editor, or a switch between Light and Dark Mode.
+    func reloadAppearance() {
+        let updated = Theme.current()
+        guard updated != appearance else { return }
+        appearance = updated
+        engine.apply(updated)
     }
 
     static func local(shellIntegration: Bool = true) -> TerminalSession {
@@ -217,6 +230,8 @@ final class TerminalSession: Identifiable {
     func clearScrollback() { engine.send(text: "\u{0C}") } // TODO: engine-level scrollback clear (⌘K)
 
     func close() {
+        if let appearanceObserver { NotificationCenter.default.removeObserver(appearanceObserver) }
+        appearanceObserver = nil
         if !exited { engine.terminate() } // an exited shell's PID may already belong to another process
         stopPolling()
         SecureKeyboardEntry.shared.update(secretPromptFocused: false)

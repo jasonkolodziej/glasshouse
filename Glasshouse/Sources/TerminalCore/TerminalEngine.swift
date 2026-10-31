@@ -43,6 +43,10 @@ public enum EngineEvent: Sendable {
     case exited(code: Int32?)
 }
 
+public enum TerminalCursorShape: Sendable, Equatable {
+    case block, underline, bar
+}
+
 /// Visual settings the engine controls. The grid is always drawn opaque unless the user
 /// opts into translucency AND Reduce Transparency is off — see DesignSystem.GlassPolicy.
 public struct TerminalAppearance: Sendable, Equatable {
@@ -51,16 +55,33 @@ public struct TerminalAppearance: Sendable, Equatable {
     public var foreground: NSColor
     public var background: NSColor
     public var cursor: NSColor
+    /// Text under a block cursor; nil lets the engine choose.
+    public var cursorText: NSColor?
+    /// Selection highlight; nil uses the system's.
+    public var selection: NSColor?
+    public var cursorShape: TerminalCursorShape
+    public var cursorBlink: Bool
+    /// Bold text in the bright ANSI colours.
+    public var boldIsBright: Bool
     public var backgroundOpacity: CGFloat
     /// 16 ANSI colors, normal then bright.
     public var ansi: [NSColor]
+    /// Space around the grid, drawn by the pane (not the engine) in the background colour.
+    public var paddingHorizontal: CGFloat
+    public var paddingVertical: CGFloat
 
     public init(fontName: String = "SF Mono", fontSize: CGFloat = 13,
                 foreground: NSColor, background: NSColor, cursor: NSColor,
-                backgroundOpacity: CGFloat = 1, ansi: [NSColor]) {
+                cursorText: NSColor? = nil, selection: NSColor? = nil,
+                cursorShape: TerminalCursorShape = .block, cursorBlink: Bool = false, boldIsBright: Bool = true,
+                backgroundOpacity: CGFloat = 1, ansi: [NSColor],
+                paddingHorizontal: CGFloat = 10, paddingVertical: CGFloat = 6) {
         self.fontName = fontName; self.fontSize = fontSize
         self.foreground = foreground; self.background = background; self.cursor = cursor
+        self.cursorText = cursorText; self.selection = selection
+        self.cursorShape = cursorShape; self.cursorBlink = cursorBlink; self.boldIsBright = boldIsBright
         self.backgroundOpacity = backgroundOpacity; self.ansi = ansi
+        self.paddingHorizontal = paddingHorizontal; self.paddingVertical = paddingVertical
     }
 
     public var font: NSFont {

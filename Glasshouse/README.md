@@ -70,11 +70,12 @@ Sources/
   SSHAgentCore/                  RFC 9987 agent: wire format, Secure Enclave key store, BSD-socket server, peer identity
   DesignSystem/                  glassChrome() + accessible fallbacks, APCA contrast floor, TrustCapsule, tokens
   SSHConfig/                     ~/.ssh/glasshouse.conf hosts, the Include in ~/.ssh/config, SE key discovery, scripts
+  TerminalTheme/                 YAML themes and appearance.yaml, 15 built-in templates, iTerm2/Ghostty import
 Apps/
   Glasshouse/                    SwiftUI app: workspace, tabs, pane overlays, palette, approval card, settings
     GlasshouseIcons.xcassets/    app icon candidates AppIconA/B/C (see App icon)
   GlasshouseAgent/               LSUIElement login item serving Secure Enclave keys (opt-in)
-Tests/                           swift-testing suites (SSHConfigTests is Foundation-only and also runs on Linux)
+Tests/                           swift-testing suites (SSHConfigTests and TerminalThemeTests also run on Linux)
 project.yml                      XcodeGen spec (bundle layout, entitlements, signing)
 ```
 
@@ -102,6 +103,135 @@ The fix has been sent upstream; switch back to `migueldeicaza/SwiftTerm` once a 
 | L2 controls | toolbar + tab strip, sidebar, find bar | system Liquid Glass |
 | L3 transient | command palette, Touch ID approval card | glass + dimming via `glassChrome(.transient)` |
 | L4 trusted | TrustCapsule, card header | filled capsule; driven **only** by kernel state (termios, process table) |
+
+## Themes and appearance
+
+Settings › Appearance picks a theme for Light Mode and one for Dark Mode, and holds the font, cursor, window and
+contrast settings every theme starts from. Every change applies to open tabs straight away, and switching macOS
+between Light and Dark Mode switches the theme.
+
+### Files
+
+| File | What it holds |
+| --- | --- |
+| `~/Library/Application Support/Glasshouse/appearance.yaml` | Which themes to use, and the global font, cursor, window and contrast settings. Settings writes it; you can edit it too. |
+| `~/Library/Application Support/Glasshouse/Themes/*.yaml` | Your themes, one per file. The file name is the theme's id. **Show Themes Folder** opens it. |
+| `Sources/TerminalTheme/Themes/*.yaml` | The built-in templates. Read-only: **Customize…** copies one into your themes folder. |
+
+A file that doesn't load (bad colour, missing key, value out of range) is listed under the gallery with the reason, and
+the rest keep working. A theme that's in use but deleted falls back to Glasshouse Dark or Light.
+
+### How settings combine
+
+```mermaid
+flowchart LR
+    D["Built-in defaults<br/>SF Mono 13 pt, block cursor,<br/>10 / 6 pt padding, opaque"] --> R
+    C["appearance.yaml<br/>font, cursor, window, contrast"] --> R
+    T["Theme file<br/>colours, plus optional<br/>font, cursor, window, contrast"] --> R
+    R["Resolved appearance<br/>the theme's own settings win,<br/>then appearance.yaml, then defaults"] --> F["Contrast floor<br/>APCA, raised by Increase Contrast"]
+    F --> E["Terminal"]
+```
+
+### appearance.yaml
+
+```yaml
+schema: 1
+theme:
+  dark: dracula            # theme ids: file names without .yaml
+  light: solarized-light
+  follow-system: true      # false: use the dark theme all the time
+font:
+  family: SF Mono
+  size: 13
+  bold-is-bright: true     # draw bold text in the bright ANSI colours
+cursor:
+  style: block             # block, underline or bar
+  blink: false
+window:
+  padding-horizontal: 10   # points, 0–64
+  padding-vertical: 6
+  opacity: 1               # 0.3–1; below 1 Liquid Glass shows through
+contrast: standard         # standard, faithful or high
+```
+
+Every key is optional; a missing one keeps its default. The first time Glasshouse runs with themes, it carries over the
+font size, translucency and contrast choices from earlier versions.
+
+### Theme files
+
+```yaml
+schema: 1
+name: Dracula
+author: Dracula Theme                  # optional
+source: https://draculatheme.com       # optional: where the colours come from
+appearance: dark                       # dark or light; only used to suggest the theme
+colors:
+  background: "#282a36"
+  foreground: "#f8f8f2"
+  bold: "#ffffff"                      # optional; default: the foreground
+  cursor: "#f8f8f2"                    # optional; default: the system accent colour
+  cursor-text: "#282a36"               # optional; text under a block cursor
+  selection: "#44475a"                 # optional; default: the system selection colour
+  normal:
+    black: "#21222c"
+    red: "#ff5555"
+    green: "#50fa7b"
+    yellow: "#f1fa8c"
+    blue: "#bd93f9"
+    magenta: "#ff79c6"
+    cyan: "#8be9fd"
+    white: "#f8f8f2"
+  bright:
+    black: "#6272a4"
+    # … the same eight names
+# Optional: settings that override appearance.yaml while this theme is in use.
+font: { family: JetBrains Mono, size: 14 }
+cursor: { style: bar, blink: true }
+window: { padding-horizontal: 16, opacity: 0.9 }
+contrast: faithful
+```
+
+- Colours are `#rrggbb` (or `#rgb`, or `#rrggbbaa`), in quotes because `#` starts a YAML comment.
+- Only `name`, `colors.background` and `colors.foreground` are required. Without `normal`, Glasshouse's own ANSI palette
+  is used; without `bright`, it's derived from `normal`. `appearance` defaults to whichever the background suits.
+- Override sections can hold just one key, such as `font: { size: 15 }`.
+
+### Built-in templates
+
+Glasshouse Dark and Light (the original look), Solarized Dark and Light, Dracula, Nord, Gruvbox Dark and Light,
+Catppuccin Mocha and Latte, Tokyo Night, One Dark, Terminal Basic (after Terminal.app's Basic profile), and High
+Contrast Dark and Light. Each file credits its source.
+
+### Making your own
+
+- **In the gallery:** click a theme to use it for the current mode; right-click for **Use for Dark Mode**, **Use for
+  Light Mode**, **Customize…** (built-in) or **Edit…** and **Duplicate…** (yours), **Export…** and **Delete…**.
+  **New Theme** starts from a neutral dark or light palette, or from the theme in use.
+- **The theme editor** opens in its own window:
+  - a colour picker for every slot: background, text, bold, cursor, cursor text, selection and the 16 ANSI colours.
+    Optional slots have a switch, so a theme can leave them to the system;
+  - **Derive Bright Row** makes the bright row from the normal one, and **Reset to Glasshouse Palette** starts the ANSI
+    colours over;
+  - switches to give the theme its own font, cursor, padding and opacity, or contrast level;
+  - a live preview, drawn with the same contrast adjustment as the terminal, and a contrast report listing each colour's
+    APCA Lc against the background. A dot under an ANSI colour marks one Glasshouse will adjust;
+  - **Save** (⌘S), **Revert** and **Export…**.
+- **Import…** reads Glasshouse YAML, iTerm2 `.itermcolors` and Ghostty theme files. iTerm2 colours are taken as sRGB,
+  so "Calibrated" and P3 colours come out slightly different. Missing ANSI colours are filled in.
+- **By hand:** put a `.yaml` file in the themes folder. It shows up the next time Settings opens.
+
+### Contrast
+
+Glasshouse keeps text readable whatever the theme: colours too close to the background are moved just far enough to
+reach a floor, measured with APCA.
+
+| Level | Default text | ANSI colours |
+| --- | --- | --- |
+| Standard | Lc 75 | Lc 60 |
+| Faithful to the theme | Lc 75 | Lc 45 |
+| High (and whenever Increase Contrast is on) | Lc 90 | Lc 75 |
+
+Black and white slots (0, 7, 8, 15) are never adjusted: they're meant to match or invert the background.
 
 ## Touch ID and SSH
 

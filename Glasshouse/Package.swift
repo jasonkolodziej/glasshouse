@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "SSHAgentCore", targets: ["SSHAgentCore"]),
         .library(name: "DesignSystem", targets: ["DesignSystem"]),
         .library(name: "SSHConfig", targets: ["SSHConfig"]),
+        .library(name: "TerminalTheme", targets: ["TerminalTheme"]),
     ],
     traits: [
         // Default build targets SwiftTerm 1.99.1 (the 2.0 preview API). Enable this trait only if you
@@ -30,6 +31,8 @@ let package = Package(
         // (no terminalContentSnapshot); 2.0.0 final is excluded until checked against the adapter.
         .package(url: "https://github.com/jasonkolodziej/SwiftTerm",
                  revision: "783ae5091faeb986132135e8dd71bf1b13712dc8"),
+        // YAML for theme files and appearance.yaml.
+        .package(url: "https://github.com/jpsim/Yams", from: "6.0.0"),
     ],
     targets: [
         // Engine abstraction + SwiftTerm adapter, PTY environment, password-prompt detection.
@@ -56,11 +59,16 @@ let package = Package(
         // Managed ~/.ssh/glasshouse.conf for Secure Enclave keys: validated hosts, the Include in ~/.ssh/config,
         // key discovery and setup scripts. Foundation only, so its tests also run on Linux.
         .target(name: "SSHConfig"),
+        // Terminal themes as YAML: model, bundled templates, ~/Library/Application Support/Glasshouse/Themes,
+        // appearance.yaml, iTerm2/Ghostty import. Foundation + Yams, so its tests also run on Linux.
+        .target(name: "TerminalTheme", dependencies: [.product(name: "Yams", package: "Yams")],
+                resources: [.copy("Themes")]),
 
         .testTarget(name: "SSHAgentCoreTests", dependencies: ["SSHAgentCore"]),
         .testTarget(name: "ShellIntegrationTests", dependencies: ["ShellIntegration"]),
         .testTarget(name: "DesignSystemTests", dependencies: ["DesignSystem"]),
         .testTarget(name: "SSHConfigTests", dependencies: ["SSHConfig"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "TerminalThemeTests", dependencies: ["TerminalTheme"], resources: [.copy("Fixtures")]),
     ],
     swiftLanguageModes: [.v6]
 )

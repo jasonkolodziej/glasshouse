@@ -45,6 +45,8 @@ targets:
         product: DesignSystem
       - package: GlasshouseKit
         product: SSHConfig
+      - package: GlasshouseKit
+        product: TerminalTheme
       - target: GlasshouseAgent
         embed: true
         codeSign: true
@@ -111,3 +113,4 @@ schemes:
         - package: GlasshouseKit/ShellIntegrationTests
         - package: GlasshouseKit/DesignSystemTests
         - package: GlasshouseKit/SSHConfigTests
+        - package: GlasshouseKit/TerminalThemeTests
