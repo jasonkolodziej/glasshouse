@@ -738,7 +738,8 @@ impl App {
         records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
         records
             .into_iter()
-            .filter_map(|r| r.command_line.as_deref().map(str::trim).map(str::to_owned))
+            .filter_map(|r| r.command_line.as_deref().map(crate::ui::strip_prompt))
+            .filter(|c| !c.is_empty())
             .collect()
     }
 

@@ -1,27 +1,27 @@
-//! L3: transient glass — the command palette, the approval card and the find bar — and the
-//! dimming behind a modal one.
+//! L3: transient boxes — the command palette, the approval card and the find bar — each titled
+//! in its top rule, and the dimming behind a modal one.
 
 use design_system::gh;
-use rune::tok::Family;
 use rune::{Align, Color, El, Key, KeyEvent, Tx, col, el, row, text, text_input};
 
-use super::{Ink, glass, pill, style};
+use super::{Ink, UI, hrule, style, titled};
 use crate::app::App;
 use crate::palette::PaletteItem;
 use crate::session::{ApprovalContext, ApprovalPhase, ApprovalSource};
 
 /// Dims everything behind a modal overlay; pressing it dismisses the overlay.
-pub fn dim(key: &str, dismiss: fn(&mut App, &mut Tx)) -> El {
+pub fn dim(key: &str, ink: &Ink, dismiss: fn(&mut App, &mut Tx)) -> El {
     el().key(key)
         .absolute(0.0, 0.0)
         .w_full()
         .h_full()
         .hit()
-        .fill(Color::BLACK.alpha(gh::DIM_OPACITY))
+        .fill(Color::BLACK.alpha(if ink.dark { 0.55 } else { 0.35 }))
         .on_press_tx(move |s: &mut App, tx| dismiss(s, tx))
 }
 
-const PALETTE_ROWS: usize = 9;
+const PALETTE_ROWS: usize = 12;
+const PALETTE_WIDTH: f32 = 680.0;
 
 pub fn palette(app: &App, ink: &Ink) -> El {
     let Some(state) = &app.palette else {
@@ -29,19 +29,15 @@ pub fn palette(app: &App, ink: &Ink) -> El {
     };
     let results = app.palette_results();
     let selection = state.selection.min(results.len().saturating_sub(1));
-    // Keep the selected row in the window of rows shown.
     let first = selection.saturating_sub(PALETTE_ROWS - 1);
 
-    let field = text_input(&state.edit, style(16.0, 450.0).lh(24.0))
+    let field = text_input(&state.edit, style(14.0, 500.0).lh(22.0))
         .key("palette-field")
         .single_line()
         .grow(1.0)
         .color(ink.text)
         .caret(ink.accent, ink.accent.alpha(0.3))
-        .placeholder(
-            "Search actions, hosts, tabs and recent commands",
-            ink.tertiary,
-        )
+        .placeholder("actions, hosts, tabs, recent commands", ink.tertiary)
         .on_edit(|s: &mut App| match &mut s.palette {
             Some(p) => &mut p.edit,
             None => &mut s.scratch,
@@ -68,111 +64,83 @@ pub fn palette(app: &App, ink: &Ink) -> El {
         })
         .on_submit(|s: &mut App, tx| s.run_palette_selection(tx));
 
+    let count = results.len();
     let rows = results
         .iter()
         .enumerate()
         .skip(first)
         .take(PALETTE_ROWS)
         .map(|(i, item)| palette_row(i, item, i == selection, ink));
-    let count = results.len();
+    let mut list = col().key("palette-results").w_full().py(4.0).children(rows);
+    if results.is_empty() {
+        list = list.child(
+            text("no matches")
+                .font(style(UI, 450.0))
+                .color(ink.tertiary)
+                .px(14.0)
+                .py(8.0),
+        );
+    }
+    let w = if app.window.0 > 0.0 {
+        app.window.0
+    } else {
+        crate::SIZE.0
+    };
     let footer = row()
         .w_full()
-        .px(16.0)
-        .py(9.0)
-        .gap(14.0)
+        .h(24.0)
+        .px(14.0)
+        .gap(16.0)
         .center_y()
-        .border_sides([0.5, 0.0, 0.0, 0.0], ink.hairline)
-        .child(hint("↑↓", "Move", ink))
-        .child(hint("↩", "Run", ink))
-        .child(hint("esc", "Close", ink))
+        .child(hint("↑↓", "move", ink))
+        .child(hint("↩", "run", ink))
+        .child(hint("esc", "close", ink))
         .child(el().grow(1.0))
         .child(
             text(format!(
-                "{count} result{}",
-                if count == 1 { "" } else { "s" }
+                "{}/{count}",
+                if count == 0 { 0 } else { selection + 1 }
             ))
-            .font(style(11.0, 500.0))
+            .font(style(11.5, 500.0))
             .color(ink.tertiary),
         );
-
-    let mut list = col()
-        .key("palette-results")
-        .w_full()
-        .padding(6.0)
-        .gap(2.0)
-        .children(rows);
-    if results.is_empty() {
-        list = list.child(
-            text("No matches")
-                .font(style(13.0, 450.0))
-                .color(ink.secondary)
-                .padding(14.0),
-        );
-    }
-    glass(
+    titled(
         col()
             .key("palette")
-            .absolute(0.0, 0.0)
-            .w(gh::size::PALETTE_WIDTH)
-            .clip_rounded(gh::radius::PALETTE),
+            .absolute(((w - PALETTE_WIDTH) / 2.0).max(12.0), 72.0)
+            .w(PALETTE_WIDTH),
+        "command palette",
         ink,
-        gh::radius::PALETTE,
-        34.0,
-        ink.glass_strong,
     )
-    .shadow(24.0, 60.0, ink.shadow)
-    .center_x_in_window(app.window.0, 64.0)
     .child(
         row()
             .w_full()
-            .h(58.0)
-            .px(18.0)
-            .gap(12.0)
+            .h(44.0)
+            .px(14.0)
+            .gap(10.0)
             .center_y()
-            .border_sides([0.0, 0.0, 0.5, 0.0], ink.hairline)
-            .child(text("⌕").font(style(20.0, 500.0)).color(ink.secondary))
+            .child(text("❯").font(style(15.0, 700.0)).color(ink.accent))
             .child(field),
     )
+    .child(hrule(ink))
     .child(list)
+    .child(hrule(ink))
     .child(footer)
 }
 
-trait Place {
-    fn center_x_in_window(self, window_width: f32, top: f32) -> Self;
-}
-
-impl Place for El {
-    /// Centred horizontally `top` points from the window's top (the window width is from layout).
-    fn center_x_in_window(self, window_width: f32, top: f32) -> El {
-        let w = if window_width > 0.0 {
-            window_width
-        } else {
-            1180.0
-        };
-        self.absolute(((w - gh::size::PALETTE_WIDTH) / 2.0).max(12.0), top)
-    }
-}
-
 fn hint(key: &str, label: &str, ink: &Ink) -> El {
-    row().gap(5.0).center_y().child(keycap(key, ink)).child(
-        text(label.to_owned())
-            .font(style(11.0, 500.0))
-            .color(ink.tertiary),
-    )
-}
-
-fn keycap(key: &str, ink: &Ink) -> El {
     row()
-        .h(18.0)
-        .px(6.0)
-        .center()
-        .radius(5.0)
-        .fill(ink.selected)
-        .border(0.5, ink.hairline)
+        .gap(6.0)
+        .center_y()
         .child(
             text(key.to_owned())
-                .font(style(10.5, 600.0))
+                .font(style(11.5, 650.0))
                 .color(ink.secondary),
+        )
+        .child(
+            text(label.to_owned())
+                .font(style(11.5, 450.0))
+                .color(ink.tertiary),
         )
 }
 
@@ -184,56 +152,58 @@ fn palette_row(index: usize, item: &PaletteItem, selected: bool, ink: &Ink) -> E
         .label(item.title.clone())
         .hit()
         .w_full()
-        .h(44.0)
+        .h(26.0)
         .px(10.0)
-        .gap(12.0)
+        .gap(10.0)
         .center_y()
-        .radius(12.0)
         .hover(ink.hover)
         .on_press_tx(move |s: &mut App, tx| {
             s.close_palette(tx);
             s.run_palette_action(action.clone(), tx);
         })
         .child(
-            row()
-                .size(28.0, 28.0)
-                .center()
-                .radius(8.0)
-                .fill(if selected { ink.accent } else { ink.selected })
-                .child(
-                    text(item.icon)
-                        .font(style(12.0, 700.0).family(Family::Mono))
-                        .color(if selected {
-                            Color::WHITE
-                        } else {
-                            ink.secondary
-                        }),
-                ),
+            text(if selected { "▸" } else { " " })
+                .font(style(UI, 700.0))
+                .color(ink.accent),
         )
         .child(
-            col()
-                .grow(1.0)
-                .min_w(0.0)
-                .gap(1.0)
-                .child(
-                    text(item.title.clone())
-                        .font(style(13.5, 550.0))
-                        .color(ink.text)
-                        .truncate(),
-                )
-                .children(item.subtitle.clone().map(|s| {
-                    text(s)
-                        .font(style(11.5, 450.0))
-                        .color(ink.secondary)
-                        .truncate()
-                })),
+            text(item.icon)
+                .font(style(UI, 600.0))
+                .color(if selected { ink.accent } else { ink.tertiary })
+                .w(18.0),
         )
-        .child(pill(item.kind.clone(), ink.secondary, ink.hover));
+        .child(
+            text(item.title.clone())
+                .font(style(UI, if selected { 650.0 } else { 500.0 }))
+                .color(ink.text)
+                .truncate()
+                .max_w(300.0),
+        )
+        .children(item.subtitle.clone().map(|s| {
+            text(s)
+                .font(style(11.5, 450.0))
+                .color(ink.tertiary)
+                .truncate()
+        }))
+        .child(el().grow(1.0))
+        .child(
+            text(item.kind.to_lowercase())
+                .font(style(11.5, 500.0))
+                .color(ink.secondary),
+        );
     if let Some(shortcut) = item.shortcut {
-        r = r.child(keycap(shortcut, ink));
+        r = r.child(
+            text(shortcut)
+                .font(style(11.5, 650.0))
+                .color(ink.secondary)
+                .w(110.0)
+                .align(Align::End),
+        );
+    } else {
+        r = r.child(el().w(110.0));
     }
     if selected {
-        r = r.fill(ink.accent.alpha(if ink.dark { 0.24 } else { 0.16 }));
+        r = r.fill(ink.selected);
     }
     r
 }
@@ -247,59 +217,37 @@ pub fn approval_card(c: &ApprovalContext, ink: &Ink) -> El {
         .gap(10.0)
         .center_y()
         .child(
-            row()
-                .size(34.0, 34.0)
-                .center()
-                .radius(17.0)
-                .fill(ink.accent.alpha(0.2))
-                .border(1.5, ink.accent.alpha(0.7))
-                .child(
-                    text(if waiting { "◉" } else { "●" })
-                        .font(style(16.0, 700.0))
-                        .color(ink.accent),
-                ),
+            text(if waiting { "◉" } else { "●" })
+                .font(style(15.0, 700.0))
+                .color(ink.blue),
         )
         .child(
-            col()
-                .gap(1.0)
-                .child(
-                    text(if waiting {
-                        "Waiting for Touch ID…"
-                    } else {
-                        "Password requested"
-                    })
-                    .font(style(15.0, 650.0))
-                    .color(ink.text),
-                )
-                .child(
-                    text("sudo · approve on the sensor")
-                        .font(style(11.5, 450.0))
-                        .color(ink.secondary),
-                ),
-        );
+            text(if waiting {
+                "waiting for touch id…"
+            } else {
+                "password requested"
+            })
+            .font(style(13.5, 700.0))
+            .color(ink.text),
+        )
+        .child(el().grow(1.0))
+        .child(text("sudo").font(style(UI, 600.0)).color(ink.tertiary));
     let from = [Some(c.tab_title.as_str()), c.directory.as_deref()]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join(" · ");
-    let grid = col()
-        .w_full()
-        .gap(6.0)
-        .child(field("Command", &c.command, true, ink))
-        .child(field("Run as", &c.run_as, false, ink))
-        .child(field("Host", &c.host, false, ink))
-        .child(field("From", &from, false, ink));
     let kernel = c.source == ApprovalSource::Kernel;
     let source = row()
-        .gap(6.0)
+        .gap(8.0)
         .center_y()
         .child(
-            text(if kernel { "✓" } else { "⚠" })
-                .font(style(11.0, 700.0))
+            text(if kernel { "✓" } else { "!" })
+                .font(style(UI, 700.0))
                 .color(if kernel { ink.green } else { ink.orange }),
         )
         .child(
-            text(format!("Source: {}", c.source.as_str()))
+            text(format!("source: {}", c.source.as_str()))
                 .font(style(11.5, 500.0))
                 .color(if kernel { ink.secondary } else { ink.orange }),
         );
@@ -310,7 +258,7 @@ pub fn approval_card(c: &ApprovalContext, ink: &Ink) -> El {
             .font(style(11.5, 450.0))
             .color(ink.secondary)
     });
-    glass(
+    titled(
         col()
             .key("approval")
             .role("alert")
@@ -321,59 +269,61 @@ pub fn approval_card(c: &ApprovalContext, ink: &Ink) -> El {
                 c.host,
                 c.source.as_str()
             ))
-            .w(gh::size::CARD_WIDTH)
-            .padding(gh::space::L)
-            .gap(gh::space::M),
+            .w(gh::size::CARD_WIDTH + 40.0)
+            .px(16.0)
+            .pt(18.0)
+            .pb(14.0)
+            .gap(10.0),
+        "touch id",
         ink,
-        gh::radius::CARD,
-        30.0,
-        ink.glass_strong,
     )
-    .shadow(16.0, 44.0, ink.shadow)
     .child(header)
-    .child(el().w_full().h(0.5).fill(ink.hairline))
-    .child(grid)
+    .child(hrule(ink))
+    .child(
+        col()
+            .w_full()
+            .gap(4.0)
+            .child(field("command", &c.command, true, ink))
+            .child(field("run as", &c.run_as, false, ink))
+            .child(field("host", &c.host, false, ink))
+            .child(field("from", &from, false, ink)),
+    )
     .child(source)
     .children(fallback)
 }
 
-fn field(key: &str, value: &str, mono: bool, ink: &Ink) -> El {
-    let value_style = if mono {
-        style(12.5, 650.0).family(Family::Mono)
-    } else {
-        style(13.0, 450.0)
-    };
+fn field(key: &str, value: &str, strong: bool, ink: &Ink) -> El {
     row()
         .w_full()
-        .gap(gh::space::M)
+        .gap(12.0)
         .child(
             text(key.to_owned())
-                .font(style(12.5, 450.0))
-                .color(ink.secondary)
-                .w(64.0)
-                .align(Align::End),
+                .font(style(UI, 450.0))
+                .color(ink.tertiary)
+                .w(64.0),
         )
         .child(
             text(value.to_owned())
-                .font(value_style)
-                .color(ink.text)
+                .font(style(UI, if strong { 700.0 } else { 500.0 }))
+                .color(if strong { ink.orange } else { ink.text })
                 .grow(1.0)
+                .min_w(0.0)
                 .wrap()
                 .max_lines(3),
         )
 }
 
-/// Find in the visible screen; matches are highlighted in the grid.
+/// Find in the visible screen, vim-style: `/query   N matches`. Matches are highlighted in the grid.
 pub fn find_bar(app: &App, ink: &Ink) -> El {
     let Some(edit) = &app.find else { return el() };
     let matches = app.find_matches();
-    let field = text_input(edit, style(13.0, 450.0).lh(20.0))
+    let field = text_input(edit, style(UI, 500.0).lh(18.0))
         .key("find-field")
         .single_line()
-        .w(200.0)
+        .w(220.0)
         .color(ink.text)
         .caret(ink.accent, ink.accent.alpha(0.3))
-        .placeholder("Find", ink.tertiary)
+        .placeholder("find", ink.tertiary)
         .on_edit(|s: &mut App| match &mut s.find {
             Some(f) => f,
             None => &mut s.scratch,
@@ -386,40 +336,25 @@ pub fn find_bar(app: &App, ink: &Ink) -> El {
             }
             false
         });
-    let left = if app.show_sidebar {
-        gh::size::SIDEBAR_WIDTH + super::MARGIN
-    } else {
-        0.0
-    };
-    let pane_right = super::MARGIN + gh::size::GUTTER_WIDTH + 24.0;
-    let w = if app.window.0 > 0.0 {
-        app.window.0
-    } else {
-        1180.0
-    };
-    let x = (w - pane_right - 300.0).max(left + 24.0);
-    glass(
+    super::panel(
         row()
             .key("find")
-            .absolute(x, super::TOOLBAR_HEIGHT + 14.0)
-            .h(36.0)
-            .pl(14.0)
-            .pr(6.0)
-            .gap(10.0)
+            .h(30.0)
+            .pl(12.0)
+            .pr(4.0)
+            .gap(8.0)
             .center_y(),
         ink,
-        18.0,
-        24.0,
-        ink.glass_strong,
+        ink.panel,
     )
     .shadow(8.0, 24.0, ink.shadow)
-    .child(text("⌕").font(style(14.0, 500.0)).color(ink.secondary))
+    .child(text("/").font(style(13.0, 700.0)).color(ink.accent))
     .child(field)
     .child(
         text(if edit.text.is_empty() {
             String::new()
         } else {
-            format!("{matches} found")
+            format!("{matches} match{}", if matches == 1 { "" } else { "es" })
         })
         .font(style(11.5, 500.0))
         .color(ink.secondary),
@@ -430,14 +365,13 @@ pub fn find_bar(app: &App, ink: &Ink) -> El {
             .role("button")
             .label("Close find bar")
             .hit()
-            .size(24.0, 24.0)
+            .size(24.0, 22.0)
             .center()
-            .radius(12.0)
-            .hover(ink.hover)
+            .hover(ink.selected)
             .on_press_tx(|s: &mut App, tx| {
                 s.find = None;
                 tx.blur();
             })
-            .child(text("×").font(style(14.0, 600.0)).color(ink.secondary)),
+            .child(text("esc").font(style(11.0, 600.0)).color(ink.tertiary)),
     )
 }

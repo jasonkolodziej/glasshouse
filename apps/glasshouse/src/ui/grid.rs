@@ -11,7 +11,9 @@ use rune::{Color, El, GridRow, Span, TextStyle, col, el, grid, row, text};
 use shell_integration::CommandStatus;
 use terminal_core::{CellFlags, GridLine, TerminalAppearance, TerminalCursorShape, TerminalEngine};
 
-use super::{Ink, MARGIN, PANE_RADIUS, color, overlays, style};
+use design_system::TrustState;
+
+use super::{Ink, UI, color, overlays, style};
 use crate::app::{App, CellSize};
 use crate::session::Session;
 use crate::shortcuts::{self, Shortcut};
@@ -65,8 +67,6 @@ pub fn pane(app: &App, ink: &Ink) -> El {
         return empty(ink);
     };
     let a = &session.appearance;
-    let bg = color(a.background);
-    let opacity = a.background_opacity.clamp(0.0, 1.0);
     let cell = app.cell.unwrap_or_else(|| measure_cell(a));
 
     let area = el()
@@ -76,33 +76,36 @@ pub fn pane(app: &App, ink: &Ink) -> El {
         .on_layout(|s: &mut App, r: [f32; 4]| s.set_pane_size(r[2], r[3]))
         .child(screen(app, session, cell, ink));
 
-    let mut pane =
-        col()
-            .key(format!("pane-{}", session.id))
-            .role("group")
-            .label(session.title.clone())
-            .grow(1.0)
-            .h_full()
-            .radius(PANE_RADIUS)
-            .shadow(10.0, 36.0, ink.shadow)
-            .backdrop_blur(26.0)
-            .fill(bg.alpha(opacity))
-            .border(1.0, ink.rim.alpha(ink.rim.a * 0.8))
-            .clip_rounded(PANE_RADIUS)
-            .child(row().w_full().h_full().child(area).child(gutter(
-                session,
-                ink,
-                pane_height(app),
-            )));
+    let mut pane = col()
+        .key(format!("pane-{}", session.id))
+        .role("group")
+        .label(session.title.clone())
+        .grow(1.0)
+        .min_w(0.0)
+        .h_full()
+        .child(header(session, ink))
+        .child(super::hrule(ink))
+        .child(
+            row()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .child(area)
+                .child(gutter(session, ink, pane_height(app))),
+        )
+        .child(status_line(app, session, ink));
+    if ink.glass {
+        pane = pane.backdrop_blur(18.0);
+    }
     if let Some(error) = &session.start_error {
-        pane = pane.child(banner(&format!("The shell couldn't start: {error}"), ink));
+        pane = pane.child(banner(&format!("the shell couldn't start: {error}"), ink));
     } else if session.exited {
         let code = session
             .exit_code
             .map_or("a signal".to_owned(), |c| format!("code {c}"));
         pane = pane.child(banner(
             &format!(
-                "Process exited with {code}. {} closes the tab.",
+                "process exited with {code} · {} closes the tab",
                 shortcuts::label(Shortcut::CloseTab)
             ),
             ink,
@@ -112,14 +115,177 @@ pub fn pane(app: &App, ink: &Ink) -> El {
         pane = pane.child(overlays::approval_card(context, ink).pin(
             None,
             None,
-            Some(18.0),
-            Some(18.0),
+            Some(22.0),
+            Some(STATUS_HEIGHT + 18.0),
+        ));
+    }
+    if app.find.is_some() {
+        pane = pane.child(overlays::find_bar(app, ink).pin(
+            None,
+            Some(HEADER_HEIGHT + 10.0),
+            Some(28.0),
+            None,
         ));
     }
     pane
 }
 
-/// The pane's height from layout, or from the window before the first layout.
+const HEADER_HEIGHT: f32 = 28.0;
+const STATUS_HEIGHT: f32 = 24.0;
+
+/// `⠿   running command   duration`: the command the tab is running, or last ran.
+fn header(session: &Session, ink: &Ink) -> El {
+    let record = session.timeline.commands().iter().rev().find(|r| {
+        r.command_line
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+    });
+    let command = record
+        .and_then(|r| r.command_line.as_deref())
+        .map(strip_prompt);
+    let (title, running) = match (&command, record.map(|r| r.status())) {
+        (Some(c), Some(CommandStatus::Running)) => (c.clone(), true),
+        (Some(c), _) => (c.clone(), false),
+        _ => (session.title.clone(), false),
+    };
+    let duration = record
+        .and_then(|r| r.duration_at(std::time::SystemTime::now()))
+        .map(format_duration);
+    row()
+        .key("pane-header")
+        .w_full()
+        .h(HEADER_HEIGHT)
+        .px(10.0)
+        .gap(10.0)
+        .center_y()
+        .fill(ink.surface(ink.panel))
+        .child(text("⠿").font(style(UI, 600.0)).color(ink.tertiary))
+        .child(el().grow(1.0))
+        .child(
+            text(title)
+                .font(style(UI, 650.0))
+                .color(if running { ink.text } else { ink.secondary })
+                .truncate()
+                .max_w(560.0),
+        )
+        .child(el().grow(1.0))
+        .children(duration.map(|d| text(d).font(style(UI, 500.0)).color(ink.tertiary)))
+}
+
+/// The typed command from a captured line that starts with the prompt (display only).
+pub fn strip_prompt(line: &str) -> String {
+    let line = line.lines().next().unwrap_or(line);
+    ["❯ ", "$ ", "% ", "# ", "> "]
+        .iter()
+        .filter_map(|marker| line.rfind(marker).map(|i| i + marker.len()))
+        .max()
+        .map_or(line, |i| &line[i..])
+        .trim()
+        .to_owned()
+}
+
+/// `3m32s`, `1.8s`, `40ms`.
+pub fn format_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s >= 3600 {
+        format!("{}h{:02}m", s / 3600, (s % 3600) / 60)
+    } else if s >= 60 {
+        format!("{}m{:02}s", s / 60, s % 60)
+    } else if s >= 1 {
+        format!("{:.1}s", d.as_secs_f64())
+    } else {
+        format!("{}ms", d.as_millis())
+    }
+}
+
+/// A vim-style status line: an inverted mode block, the directory, then the grid's facts.
+fn status_line(app: &App, session: &Session, ink: &Ink) -> El {
+    let (mode, fill) = if session.exited {
+        ("EXITED".to_owned(), ink.tertiary)
+    } else {
+        match &session.trust {
+            TrustState::Idle => ("SHELL".to_owned(), ink.accent),
+            TrustState::SecureInput => ("SECRET".to_owned(), ink.blue),
+            TrustState::TouchIdSudo => ("SUDO".to_owned(), ink.blue),
+            TrustState::RemoteSession(_) => ("SSH".to_owned(), ink.orange),
+        }
+    };
+    let place = match &session.trust {
+        TrustState::RemoteSession(host) => host.clone(),
+        _ => session
+            .cwd
+            .as_deref()
+            .map(super::home_relative)
+            .unwrap_or_else(|| session.title.clone()),
+    };
+    let size = session.engine().size();
+    let last = session
+        .timeline
+        .commands()
+        .iter()
+        .rev()
+        .find(|r| r.finished_at.is_some());
+    let exit = last.and_then(|r| r.exit_code).map(|code| {
+        let (glyph, c) = if code == 0 {
+            ("✓", ink.green)
+        } else {
+            ("✗", ink.red)
+        };
+        text(format!("{glyph} {code}"))
+            .font(style(UI, 600.0))
+            .color(c)
+    });
+    let commands = session.timeline.commands().len();
+    let shell = std::path::Path::new(&std::env::var("SHELL").unwrap_or_else(|_| "sh".into()))
+        .file_name()
+        .map_or_else(|| "sh".to_owned(), |n| n.to_string_lossy().into_owned());
+    let kind = if matches!(session.trust, TrustState::RemoteSession(_)) {
+        "ssh".to_owned()
+    } else {
+        shell
+    };
+    let fact = |s: String| text(s).font(style(UI, 500.0)).color(ink.secondary);
+    let _ = app;
+    row()
+        .key("status-line")
+        .w_full()
+        .h(STATUS_HEIGHT)
+        .gap(12.0)
+        .center_y()
+        .fill(ink.surface(ink.panel))
+        .child(
+            row()
+                .h_full()
+                .px(10.0)
+                .center_y()
+                .fill(fill)
+                .child(text(mode).font(style(UI, 750.0)).color(ink.on_accent)),
+        )
+        .child(
+            text(place)
+                .font(style(UI, 500.0))
+                .color(ink.text)
+                .truncate_head()
+                .max_w(420.0),
+        )
+        .child(el().grow(1.0))
+        .children(exit)
+        .child(fact(format!(
+            "{commands} cmd{}",
+            if commands == 1 { "" } else { "s" }
+        )))
+        .child(fact(format!("{}×{}", size.cols, size.rows)))
+        .child(
+            row()
+                .h_full()
+                .px(10.0)
+                .center_y()
+                .fill(fill.alpha(0.85))
+                .child(text(kind).font(style(UI, 700.0)).color(ink.on_accent)),
+        )
+}
+
+/// The pane's grid height from layout, or from the window before the first layout.
 fn pane_height(app: &App) -> f32 {
     if app.pane_size.1 > 0.0 {
         app.pane_size.1
@@ -129,50 +295,41 @@ fn pane_height(app: &App) -> f32 {
         } else {
             crate::SIZE.1
         };
-        window - super::TOOLBAR_HEIGHT - MARGIN
+        window - super::TITLE_HEIGHT - super::BAR_HEIGHT - HEADER_HEIGHT - STATUS_HEIGHT - 4.0
     }
 }
 
 fn empty(ink: &Ink) -> El {
-    super::glass(
-        col().key("empty").grow(1.0).h_full().center().gap(8.0),
-        ink,
-        PANE_RADIUS,
-        26.0,
-        ink.glass,
-    )
-    .child(
-        text(">_")
-            .font(style(34.0, 600.0).family(Family::Mono))
-            .color(ink.tertiary),
-    )
-    .child(text("No Tabs").font(style(17.0, 650.0)).color(ink.text))
-    .child(
-        text(format!(
-            "Press {} for a new tab.",
-            shortcuts::label(Shortcut::NewTab)
-        ))
-        .font(style(13.0, 450.0))
-        .color(ink.secondary),
-    )
+    col()
+        .key("empty")
+        .grow(1.0)
+        .h_full()
+        .center()
+        .gap(6.0)
+        .child(text("no tabs").font(style(15.0, 650.0)).color(ink.text))
+        .child(
+            text(format!("{} opens one", shortcuts::label(Shortcut::NewTab)))
+                .font(style(UI, 450.0))
+                .color(ink.tertiary),
+        )
 }
 
 fn banner(message: &str, ink: &Ink) -> El {
-    super::glass(
+    super::panel(
         row()
             .key("banner")
-            .pin(Some(18.0), None, Some(18.0), Some(18.0))
-            .h(36.0)
-            .px(14.0)
+            .pin(Some(0.0), None, Some(0.0), Some(STATUS_HEIGHT))
+            .h(26.0)
+            .px(12.0)
+            .gap(8.0)
             .center_y(),
         ink,
-        18.0,
-        20.0,
-        ink.glass_strong,
+        ink.panel,
     )
+    .child(text("!").font(style(UI, 800.0)).color(ink.orange))
     .child(
         text(message.to_owned())
-            .font(style(12.5, 500.0))
+            .font(style(UI, 500.0))
             .color(ink.text)
             .truncate(),
     )
@@ -376,7 +533,7 @@ fn gutter(session: &Session, ink: &Ink, height: f32) -> El {
         let mark = match r.status() {
             CommandStatus::Succeeded => el().size(s, s).radius(s / 2.0).fill(ink.secondary),
             CommandStatus::Failed => el().size(s, s).fill(ink.red),
-            CommandStatus::Running => el().size(s, s).radius(s / 2.0).border(1.5, ink.accent),
+            CommandStatus::Running => el().size(s, s).radius(s / 2.0).border(1.5, ink.blue),
             CommandStatus::Unknown => el().size(s - 2.0, 2.0).radius(1.0).fill(ink.tertiary),
         };
         let record = r.clone();
@@ -404,7 +561,7 @@ fn gutter(session: &Session, ink: &Ink, height: f32) -> El {
     el().key("gutter")
         .role("group")
         .label("Commands")
-        .w(gh::size::GUTTER_WIDTH + MARGIN * 0.4)
+        .w(gh::size::GUTTER_WIDTH + 4.0)
         .h_full()
         .children(ticks)
 }

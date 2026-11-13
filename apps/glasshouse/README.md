@@ -1,9 +1,19 @@
 # Glasshouse (Rust + Rune)
 
 The Swift app in `Glasshouse/`, ported to Rust with the [Rune](https://github.com/anomalyco/rune)
-UI framework. The chrome is frosted glass: `El::backdrop_blur` under a translucent tint, as in
-Rune's `frosted-bar`, `glass-card` and `glass-panel` examples. The terminal pane is the theme's
-background at the window opacity over the same blur.
+UI framework. The window is drawn the way a TUI draws itself, after the character-grid IDE at
+[rune.build](https://rune.build):
+
+- one monospace font for everything, with chrome colours taken from the terminal theme
+- 1 px rules instead of cards, and square corners
+- `• tab` entries in the title row, with an accent bar over the active one
+- a pane header showing the last command and how long it took
+- a vim-style status line (`SHELL` / `SSH` / `SUDO` / `SECRET`, coloured by trust)
+- a numbered tab bar with key hints along the bottom, and an icon rail down the right
+- palette, approval card and Settings as boxes titled in their top rule, with `[x]`, `(•)` and `[ buttons ]`
+
+Below 100% window opacity (Settings → Appearance), the chrome turns to frosted glass over a
+wallpaper: `El::backdrop_blur`, as in Rune's `frosted-bar` example. See the `glass` scene.
 
 | Terminal | Sidebar |
 | --- | --- |
@@ -14,8 +24,8 @@ background at the window opacity over the same blur.
 | ![Find](../../docs/screenshots/find.png) | ![Light](../../docs/screenshots/light.png) |
 | **Settings: Security** | **Settings: SSH** |
 | ![Security](../../docs/screenshots/settings.png) | ![SSH](../../docs/screenshots/ssh.png) |
-| **Settings: Appearance** | |
-| ![Appearance](../../docs/screenshots/appearance.png) | |
+| **Settings: Appearance** | **Glass (opacity 72%)** |
+| ![Appearance](../../docs/screenshots/appearance.png) | ![Glass](../../docs/screenshots/glass.png) |
 
 ## Run
 
@@ -30,7 +40,7 @@ Linux needs `libxkbcommon-dev` to link.
 
 Every screenshot is a headless render of a scene. A scene fills the window with demo tabs: real
 terminal engines fed recorded output, so no shell is spawned. The scenes are `terminal`,
-`sidebar`, `palette`, `approval`, `find`, `settings`, `ssh`, `appearance` and `light`.
+`sidebar`, `palette`, `approval`, `find`, `settings`, `ssh`, `appearance`, `light` and `glass`.
 
 ```sh
 cargo run -p glasshouse -- --snap docs/screenshots/palette.png --scene palette --scale 2 --theme dark
@@ -40,8 +50,8 @@ Without a GPU, install Mesa's software Vulkan (`mesa-vulkan-drivers`).
 
 ## Layout
 
-- `src/ui/mod.rs`: the window, wallpaper, toolbar, tab strip, trust capsule and sidebar
-- `src/ui/grid.rs`: the terminal pane, drawn with Rune's `grid` element, plus the cursor, find highlights and command gutter
+- `src/ui/mod.rs`: the window: title row, trust block, sidebar, icon rail, hint bar and theme-derived colours
+- `src/ui/grid.rs`: the pane: header, Rune's `grid` element, cursor, find highlights, command gutter and status line
 - `src/ui/overlays.rs`: the command palette, approval card and find bar
 - `src/ui/settings.rs`: the Settings sheet
 - `src/demo.rs`: scenes for snapshots and `--demo`

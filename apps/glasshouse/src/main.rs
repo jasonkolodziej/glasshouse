@@ -1,4 +1,4 @@
-//! Glasshouse: a terminal whose chrome is glass and whose trust signals come from the kernel.
+//! Glasshouse: a terminal drawn on its own character grid, whose trust signals come from the kernel.
 //!
 //! ```sh
 //! cargo run -p glasshouse                                   # a live shell
@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Scenes (`--scene NAME`): `terminal`, `sidebar`, `palette`, `approval`, `find`, `settings`,
-//! `ssh`, `appearance` and `light`. Each fills the window with demo tabs, so no shell is spawned.
+//! `ssh`, `appearance`, `light` and `glass`. Each fills the window with demo tabs, so no shell is spawned.
 
 mod app;
 mod appearance;

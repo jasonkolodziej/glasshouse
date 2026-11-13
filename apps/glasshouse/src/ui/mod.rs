@@ -1,20 +1,30 @@
-//! The window, in the design spec's layers:
-//!   wallpaper    — the light behind the glass (a stand-in for the desktop in snapshots)
-//!   L2 controls  — toolbar, tab strip and sidebar: frosted glass over the wallpaper
-//!   L1 content   — the terminal pane: the theme's background at its opacity, over a blur
-//!   L3 transient — command palette, approval card, find bar, Settings: glass with dimming
-//!   L4 trusted   — trust capsule and the card's header: kernel state only, never program text
+//! The window, drawn the way a TUI draws itself: one monospace font, the terminal theme's own
+//! colours for the chrome, 1 px rules instead of cards, square corners, and an accent bar on
+//! whatever has focus.
+//!
+//!   title row    — `• tab` entries (accent bar over the active one) and the trust block
+//!   body         — sidebar │ pane (header, grid, status line) │ icon rail
+//!   hint bar     — numbered tabs (⌘1…9) on the left, key hints on the right
+//!   L3 overlays  — palette, approval card, find, Settings: boxed, titled in their top rule
+//!   L4 trusted   — the trust block and the card's header: kernel state only, never program text
+//!
+//! Below 100% window opacity the theme background turns translucent and a wallpaper with a
+//! backdrop blur shows through: the same frosted technique as Rune's `frosted-bar` example.
 
 mod grid;
+
+pub use grid::strip_prompt;
 mod overlays;
 mod settings;
 
-use design_system::{Rgba, TrustState, TrustTint, gh};
+use design_system::{Rgba, TrustState, TrustTint};
 use rune::color::srgb_decode;
+use rune::tok::Family;
 use rune::{Color, Cx, El, TextStyle, col, el, oklch, oklcha, row, text};
 use shell_integration::CommandStatus;
+use terminal_core::TerminalAppearance;
 
-use crate::app::{App, SystemEnv};
+use crate::app::{App, SettingsPane, SystemEnv};
 use crate::hosts::Credential;
 use crate::shortcuts::{self, Shortcut};
 
@@ -22,10 +32,12 @@ use crate::shortcuts::{self, Shortcut};
 pub const MONO_FAMILIES: &str =
     "JetBrains Mono, SF Mono, Menlo, DejaVu Sans Mono, ui-monospace, monospace";
 
-pub const TOOLBAR_HEIGHT: f32 = 52.0;
-/// Space between the window edge, the sidebar and the pane.
-pub const MARGIN: f32 = 10.0;
-pub const PANE_RADIUS: f32 = 16.0;
+pub const TITLE_HEIGHT: f32 = 34.0;
+pub const BAR_HEIGHT: f32 = 26.0;
+pub const RAIL_WIDTH: f32 = 40.0;
+pub const SIDEBAR_WIDTH: f32 = 260.0;
+/// Below this window opacity the chrome turns to frosted glass over the wallpaper.
+const GLASS_BELOW: f32 = 0.999;
 
 /// An sRGB design-system colour as Rune's linear colour.
 pub fn color(c: Rgba) -> Color {
@@ -37,142 +49,152 @@ pub fn color(c: Rgba) -> Color {
     }
 }
 
-/// The chrome's colours for one appearance. Glass tints are translucent: the blur shows through.
+/// The chrome's colours, taken from the terminal theme so the frame and the grid are one surface.
 #[derive(Clone, Copy, Debug)]
 pub struct Ink {
     pub dark: bool,
+    /// Translucent chrome over a blurred wallpaper (opacity below 100%).
+    pub glass: bool,
+    pub opacity: f32,
+    pub bg: Color,
+    /// A step lighter (dark) or darker (light) than `bg`: bars and headers.
+    pub panel: Color,
     pub text: Color,
     pub secondary: Color,
     pub tertiary: Color,
     pub hairline: Color,
-    pub rim: Color,
-    pub glass: Color,
-    pub glass_strong: Color,
+    pub rule: Color,
     pub hover: Color,
     pub selected: Color,
     pub accent: Color,
-    pub orange: Color,
+    pub on_accent: Color,
     pub red: Color,
     pub green: Color,
+    pub orange: Color,
+    pub blue: Color,
     pub shadow: Color,
 }
 
 impl Ink {
-    pub fn new(dark: bool) -> Ink {
-        if dark {
-            Ink {
-                dark,
-                text: oklch(0.96, 0.005, 265.0),
-                secondary: oklcha(0.92, 0.01, 265.0, 0.62),
-                tertiary: oklcha(0.92, 0.01, 265.0, 0.38),
-                hairline: Color::WHITE.alpha(0.10),
-                rim: Color::WHITE.alpha(0.16),
-                glass: oklcha(0.24, 0.02, 270.0, 0.42),
-                glass_strong: oklcha(0.2, 0.02, 270.0, 0.62),
-                hover: Color::WHITE.alpha(0.06),
-                selected: Color::WHITE.alpha(0.13),
-                accent: oklch(0.66, 0.17, 252.0),
-                orange: oklch(0.74, 0.16, 62.0),
-                red: oklch(0.66, 0.2, 25.0),
-                green: oklch(0.74, 0.15, 150.0),
-                shadow: Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.02,
-                    a: 0.45,
-                },
-            }
-        } else {
-            Ink {
-                dark,
-                text: oklch(0.2, 0.01, 265.0),
-                secondary: oklcha(0.25, 0.02, 265.0, 0.62),
-                tertiary: oklcha(0.25, 0.02, 265.0, 0.4),
-                hairline: Color::BLACK.alpha(0.08),
-                rim: Color::WHITE.alpha(0.7),
-                glass: oklcha(0.98, 0.006, 265.0, 0.5),
-                glass_strong: oklcha(0.985, 0.006, 265.0, 0.72),
-                hover: Color::BLACK.alpha(0.04),
-                selected: Color::BLACK.alpha(0.08),
-                accent: oklch(0.55, 0.19, 255.0),
-                orange: oklch(0.64, 0.17, 55.0),
-                red: oklch(0.56, 0.21, 25.0),
-                green: oklch(0.58, 0.15, 150.0),
-                shadow: Color {
-                    r: 0.05,
-                    g: 0.06,
-                    b: 0.12,
-                    a: 0.22,
-                },
-            }
+    pub fn new(a: &TerminalAppearance, dark: bool) -> Ink {
+        let bg = color(a.background).alpha(1.0);
+        let fg = color(a.foreground).alpha(1.0);
+        let ansi = |i: usize| color(a.ansi[i]).alpha(1.0);
+        let opacity = a.background_opacity.clamp(0.3, 1.0);
+        // Blend in Oklab, as the eye sees steps; linear light jumps too bright near black.
+        let (b, f) = (bg.to_oklab(), fg.to_oklab());
+        let mix = |t: f32| Color::from_oklab(std::array::from_fn(|i| b[i] + (f[i] - b[i]) * t));
+        Ink {
+            dark,
+            glass: opacity < GLASS_BELOW,
+            opacity,
+            bg,
+            panel: mix(if dark { 0.06 } else { 0.05 }),
+            text: fg,
+            secondary: mix(0.58),
+            tertiary: mix(0.36),
+            hairline: mix(0.13),
+            rule: mix(0.22),
+            hover: mix(0.08),
+            selected: mix(0.14),
+            accent: ansi(1),
+            on_accent: bg,
+            red: ansi(1),
+            green: ansi(2),
+            orange: ansi(3),
+            blue: ansi(4),
+            shadow: Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: if dark { 0.55 } else { 0.18 },
+            },
         }
     }
 
     pub fn tint(&self, tint: TrustTint) -> Color {
         match tint {
             TrustTint::Secondary => self.secondary,
-            TrustTint::Accent => self.accent,
+            TrustTint::Accent => self.blue,
             TrustTint::Orange => self.orange,
         }
     }
+
+    /// A surface's fill: the colour itself, or translucent when the chrome is glass.
+    pub fn surface(&self, c: Color) -> Color {
+        if self.glass { c.alpha(self.opacity) } else { c }
+    }
 }
 
+/// UI text: monospace, like every other glyph in the window.
 pub fn style(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight)
+    TextStyle::new(size, weight).family(Family::Mono)
 }
 
-/// A frosted surface: blur what's behind, tint it, and draw a light rim on the edge.
-pub fn glass(e: El, ink: &Ink, radius: f32, sigma: f32, tint: Color) -> El {
-    e.radius(radius)
-        .backdrop_blur(sigma)
-        .fill(tint)
-        .border(gh::glass_fallback::BORDER_WIDTH * 2.0, ink.rim)
+pub const UI: f32 = 12.5;
+
+/// A boxed surface: a 1 px rule round it, square corners, frosted when the chrome is glass.
+pub fn panel(e: El, ink: &Ink, fill: Color) -> El {
+    let e = e.fill(ink.surface(fill)).border(1.0, ink.rule);
+    if ink.glass { e.backdrop_blur(24.0) } else { e }
 }
 
-/// A small borderless button: a glyph or a word on a hover fill.
+/// A box with its title cut into the top rule: `┤ title ├`.
+pub fn titled(e: El, title: &str, ink: &Ink) -> El {
+    panel(e, ink, ink.bg).shadow(14.0, 40.0, ink.shadow).child(
+        text(format!(" {title} "))
+            .font(style(UI, 600.0))
+            .color(ink.accent)
+            .fill(ink.bg)
+            .px(4.0)
+            .absolute(12.0, -9.0),
+    )
+}
+
+/// A one-glyph button in the rail.
 pub fn icon_button(key: &str, glyph: &str, label: &str, ink: &Ink) -> El {
     row()
         .key(key)
         .role("button")
         .label(label)
         .hit()
-        .size(30.0, 30.0)
+        .size(30.0, 28.0)
         .center()
-        .radius(9.0)
-        .hover(ink.hover)
-        .child(text(glyph).font(style(15.0, 500.0)).color(ink.secondary))
+        .hover(ink.selected)
+        .child(text(glyph).font(style(14.0, 500.0)).color(ink.secondary))
 }
 
-/// A capsule push button.
+/// `[ label ]`: prominent buttons take the accent.
 pub fn button(key: &str, label: &str, ink: &Ink, prominent: bool) -> El {
-    let (fill, fg) = if prominent {
-        (ink.accent, Color::WHITE)
-    } else {
-        (ink.selected, ink.text)
-    };
+    let fg = if prominent { ink.accent } else { ink.text };
     row()
         .key(key)
         .role("button")
         .label(label)
         .hit()
-        .h(28.0)
-        .px(14.0)
+        .h(24.0)
+        .px(2.0)
         .center()
-        .radius(14.0)
-        .fill(fill)
-        .border(0.5, ink.hairline)
-        .child(text(label.to_owned()).font(style(12.5, 550.0)).color(fg))
+        .hover(ink.selected)
+        .child(text("[ ").font(style(UI, 500.0)).color(ink.tertiary))
+        .child(text(label.to_owned()).font(style(UI, 600.0)).color(fg))
+        .child(text(" ]").font(style(UI, 500.0)).color(ink.tertiary))
 }
 
-/// A pill for kinds and badges.
-pub fn pill(label: impl Into<String>, fg: Color, bg: Color) -> El {
-    row()
-        .h(18.0)
-        .px(7.0)
-        .center()
-        .radius(9.0)
-        .fill(bg)
-        .child(text(label.into()).font(style(10.5, 600.0)).color(fg))
+/// `[label]` for kinds and badges.
+pub fn pill(label: impl Into<String>, fg: Color, _bg: Color) -> El {
+    text(format!("[{}]", label.into()))
+        .font(style(11.5, 600.0))
+        .color(fg)
+}
+
+/// A rule across the available width.
+pub fn hrule(ink: &Ink) -> El {
+    el().w_full().h(1.0).fill(ink.hairline)
+}
+
+pub fn vrule(ink: &Ink) -> El {
+    el().w(1.0).h_full().fill(ink.hairline)
 }
 
 pub fn view(app: &App, cx: &mut Cx<App>) -> El {
@@ -184,44 +206,55 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     if app.is_live() && system != app.env {
         app.seen_env.set(Some(system));
     }
-    let ink = Ink::new(app.env.dark);
+    let appearance = app
+        .selected()
+        .map_or_else(|| app.current_appearance(), |s| s.appearance.clone());
+    let ink = Ink::new(&appearance, app.env.dark);
     let inset = cx.titlebar_inset();
 
     let body = row()
         .key("body")
         .w_full()
         .grow(1.0)
-        .px(MARGIN)
-        .pb(MARGIN)
-        .gap(MARGIN)
+        .min_h(0.0)
         .children(app.show_sidebar.then(|| sidebar(app, &ink)))
-        .child(grid::pane(app, &ink));
+        .children(app.show_sidebar.then(|| vrule(&ink)))
+        .child(grid::pane(app, &ink))
+        .child(vrule(&ink))
+        .child(rail(&ink));
+
+    let frame = col()
+        .w_full()
+        .h_full()
+        .child(title_row(app, &ink, inset))
+        .child(hrule(&ink))
+        .child(body)
+        .child(hrule(&ink))
+        .child(hint_bar(app, &ink));
 
     let mut root = el()
         .key("root")
         .w_full()
         .h_full()
-        .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]))
-        .child(wallpaper(app.window, ink.dark))
-        .child(
-            col()
-                .w_full()
-                .h_full()
-                .child(toolbar(app, &ink, inset))
-                .child(body),
-        )
-        .child(grid::cell_probe(app));
-    if app.find.is_some() {
-        root = root.child(overlays::find_bar(app, &ink));
+        .fill(ink.surface(ink.bg))
+        .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]));
+    if ink.glass {
+        root = el()
+            .key("root")
+            .w_full()
+            .h_full()
+            .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]))
+            .child(wallpaper(app.window, ink.dark));
     }
+    root = root.child(frame).child(grid::cell_probe(app));
     if app.palette.is_some() {
-        root = root.child(overlays::dim("palette-dim", |s: &mut App, tx| {
+        root = root.child(overlays::dim("palette-dim", &ink, |s: &mut App, tx| {
             s.close_palette(tx)
         }));
         root = root.child(overlays::palette(app, &ink));
     }
     if app.settings.is_some() {
-        root = root.child(overlays::dim("settings-dim", |s: &mut App, _| {
+        root = root.child(overlays::dim("settings-dim", &ink, |s: &mut App, _| {
             s.settings = None
         }));
         root = root.child(settings::sheet(app, &ink));
@@ -229,9 +262,9 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     root
 }
 
-/// Soft coloured light, as a wallpaper seen through the glass would give.
+/// Soft coloured light, seen through the glass when the window is translucent.
 fn wallpaper((w, h): (f32, f32), dark: bool) -> El {
-    let (w, h) = if w > 0.0 { (w, h) } else { (1180.0, 740.0) };
+    let (w, h) = if w > 0.0 { (w, h) } else { crate::SIZE };
     let base = if dark {
         oklch(0.17, 0.035, 278.0)
     } else {
@@ -244,7 +277,6 @@ fn wallpaper((w, h): (f32, f32), dark: bool) -> El {
         (0.85, 0.05, 0.5, oklcha(l + 0.04, 0.14, 200.0, a)),
         (0.6, 0.95, 0.6, oklcha(l - 0.04, 0.2, 262.0, a)),
         (0.05, 0.95, 0.42, oklcha(l + 0.03, 0.18, 350.0, a * 0.85)),
-        (0.42, 0.42, 0.32, oklcha(l, 0.15, 170.0, a * 0.55)),
     ];
     let lights = blobs.into_iter().map(move |(x, y, r, c)| {
         let r = r * w.max(h);
@@ -264,83 +296,41 @@ fn wallpaper((w, h): (f32, f32), dark: bool) -> El {
         .children(lights)
 }
 
-// MARK: Toolbar
+// MARK: Title row
 
-fn toolbar(app: &App, ink: &Ink, inset: f32) -> El {
-    let sidebar_toggle = icon_button("toggle-sidebar", "◧", "Toggle Sessions Sidebar", ink)
-        .help(format!(
-            "Toggle Sidebar ({})",
-            shortcuts::label(Shortcut::ToggleSidebar)
-        ))
-        .on_press(|s: &mut App| s.show_sidebar = !s.show_sidebar);
-    let new_tab = icon_button("new-tab", "+", "New Tab", ink)
-        .help(format!("New Tab ({})", shortcuts::label(Shortcut::NewTab)))
-        .on_press(|s: &mut App| s.new_tab());
-    let palette = icon_button("open-palette", "⌕", "Command Palette", ink)
-        .help(format!(
-            "Command Palette ({})",
-            shortcuts::label(Shortcut::CommandPalette)
-        ))
-        .on_press_tx(|s: &mut App, tx| s.open_palette(tx));
+/// `• title` per tab, like an editor's buffer list. The active tab is bright, with an accent bar
+/// over it; tint elsewhere is kept for trust. Titles are plain text: program-set strings must
+/// never look like the trust block.
+fn title_row(app: &App, ink: &Ink, inset: f32) -> El {
     let trust = app.selected().map_or(TrustState::Idle, |s| s.trust.clone());
-
-    row()
-        .key("toolbar")
-        .w_full()
-        .h(TOOLBAR_HEIGHT)
-        .pl(MARGIN + inset)
-        .pr(MARGIN)
-        .gap(6.0)
-        .center_y()
-        .window_drag()
-        .child(sidebar_toggle)
-        .child(el().grow(1.0))
-        .children((!app.sessions.is_empty()).then(|| tab_strip(app, ink)))
-        .child(el().grow(1.0))
-        .child(palette)
-        .child(new_tab)
-        .children(trust.is_visible().then(|| trust_capsule(&trust, ink)))
-}
-
-/// Tabs in one glass capsule. The active tab is fill and weight; tint is kept for trust signals.
-/// Titles are plain text: program-set strings must never look like the trust capsule.
-fn tab_strip(app: &App, ink: &Ink) -> El {
-    let multiple = app.sessions.len() > 1;
     let tabs = app.sessions.iter().map(|s| {
         let id = s.id;
-        let active = multiple && Some(id) == app.selected;
+        let active = Some(id) == app.selected;
         let hovered = app.hovered_tab == Some(id);
-        let closable = multiple && hovered;
-        let status = match s.timeline.current().map(|r| r.status()) {
-            _ if s.exited && s.exit_code != Some(0) => Some(("✕", ink.red)),
-            Some(CommandStatus::Running) => Some(("◌", ink.accent)),
-            Some(CommandStatus::Failed) => Some(("●", ink.red)),
-            _ => None,
+        let (glyph, glyph_color) = match s.timeline.current().map(|r| r.status()) {
+            _ if hovered && app.sessions.len() > 1 => ("×", ink.text),
+            _ if s.exited && s.exit_code != Some(0) => ("✕", ink.red),
+            Some(CommandStatus::Running) => ("◌", ink.blue),
+            Some(CommandStatus::Failed) => ("•", ink.red),
+            _ => ("•", if active { ink.accent } else { ink.tertiary }),
         };
-        let close = closable.then(|| {
-            row()
+        let bullet = text(glyph).font(style(UI, 700.0)).color(glyph_color);
+        let bullet = if hovered && app.sessions.len() > 1 {
+            bullet
                 .key(format!("close-{id}"))
                 .role("button")
                 .label("Close Tab")
                 .hit()
-                .size(16.0, 16.0)
-                .center()
-                .radius(8.0)
-                .hover(ink.selected)
                 .on_press(move |s: &mut App| s.close(id))
-                .child(text("×").font(style(12.0, 600.0)).color(ink.secondary))
-        });
-        let mut tab = row()
+        } else {
+            bullet
+        };
+        col()
             .key(format!("tab-{id}"))
             .role("tab")
             .label(s.title.clone())
             .hit()
-            .h(gh::size::TAB_HEIGHT)
-            .pl(if closable { 6.0 } else { gh::space::M })
-            .pr(gh::space::M)
-            .gap(gh::space::XS + 2.0)
-            .center_y()
-            .radius(gh::size::TAB_HEIGHT / 2.0)
+            .h_full()
             .on_press(move |s: &mut App| s.select(id))
             .on_hover_change(move |s: &mut App, inside, _| {
                 if inside {
@@ -349,82 +339,210 @@ fn tab_strip(app: &App, ink: &Ink) -> El {
                     s.hovered_tab = None;
                 }
             })
-            .children(close)
-            .children(status.map(|(g, c)| text(g).font(style(10.0, 700.0)).color(c)))
+            .child(el().w_full().h(2.0).fill(if active {
+                ink.accent
+            } else {
+                Color::TRANSPARENT
+            }))
             .child(
-                text(s.title.clone())
-                    .font(style(12.5, if active { 650.0 } else { 450.0 }))
-                    .color(if active || !multiple {
-                        ink.text
-                    } else {
-                        ink.secondary
-                    })
-                    .truncate()
-                    .max_w(170.0),
-            );
-        if active {
-            tab = tab.fill(ink.selected);
-        } else if hovered && multiple {
-            tab = tab.fill(ink.hover);
-        }
-        tab
+                row()
+                    .grow(1.0)
+                    .px(12.0)
+                    .gap(8.0)
+                    .center_y()
+                    .child(bullet)
+                    .child(
+                        text(s.title.clone())
+                            .font(style(UI, if active { 600.0 } else { 450.0 }))
+                            .color(if active { ink.text } else { ink.secondary })
+                            .truncate()
+                            .max_w(220.0),
+                    ),
+            )
     });
-    glass(
-        row()
-            .key("tabs")
-            .padding(gh::size::TAB_GROUP_INSET)
-            .gap(gh::size::TAB_SPACING)
-            .center_y()
-            .max_w(760.0),
-        ink,
-        gh::radius::CAPSULE,
-        20.0,
-        ink.glass,
-    )
-    .children(tabs)
+    row()
+        .key("toolbar")
+        .w_full()
+        .h(TITLE_HEIGHT)
+        .pl(8.0 + inset)
+        .pr(8.0)
+        .center_y()
+        .fill(ink.surface(ink.panel))
+        .window_drag()
+        .children(tabs)
+        .child(el().grow(1.0))
+        .children(trust.is_visible().then(|| trust_block(&trust, ink)))
 }
 
-/// L4: filled and tinted, from kernel state only.
-fn trust_capsule(trust: &TrustState, ink: &Ink) -> El {
+/// L4: an inverted block in the trust colour, from kernel state only.
+fn trust_block(trust: &TrustState, ink: &Ink) -> El {
     let fill = ink.tint(trust.tint());
-    let glyph = match trust {
-        TrustState::SecureInput => "●",
-        TrustState::TouchIdSudo => "◉",
-        TrustState::RemoteSession(_) => "⇄",
-        TrustState::Idle => "",
-    };
     row()
         .key("trust")
         .role("status")
         .label(trust.accessibility_description())
-        .h(28.0)
-        .px(12.0)
-        .gap(6.0)
+        .h(22.0)
+        .px(10.0)
         .center_y()
-        .radius(14.0)
         .fill(fill)
-        .shadow(2.0, 10.0, fill.alpha(0.45))
-        .child(text(glyph).font(style(12.0, 700.0)).color(Color::WHITE))
         .child(
-            text(trust.label())
-                .font(style(12.5, 650.0))
-                .color(Color::WHITE),
+            text(trust.label().to_uppercase())
+                .font(style(11.5, 700.0))
+                .color(ink.on_accent),
+        )
+}
+
+// MARK: Rail and hint bar
+
+fn rail(ink: &Ink) -> El {
+    let item = |key: &str, glyph: &str, label: &str, shortcut: Shortcut| {
+        icon_button(key, glyph, label, ink)
+            .help(format!("{label} ({})", shortcuts::label(shortcut)))
+    };
+    col()
+        .key("rail")
+        .w(RAIL_WIDTH)
+        .h_full()
+        .py(8.0)
+        .gap(4.0)
+        .items_center()
+        .fill(ink.surface(ink.panel))
+        .child(
+            item(
+                "open-palette",
+                "⌘",
+                "Command Palette",
+                Shortcut::CommandPalette,
+            )
+            .on_press_tx(|s: &mut App, tx| s.open_palette(tx)),
+        )
+        .child(
+            item("new-tab", "+", "New Tab", Shortcut::NewTab).on_press(|s: &mut App| s.new_tab()),
+        )
+        .child(
+            item(
+                "toggle-sidebar",
+                "◧",
+                "Toggle Sidebar",
+                Shortcut::ToggleSidebar,
+            )
+            .on_press(|s: &mut App| s.show_sidebar = !s.show_sidebar),
+        )
+        .child(
+            item("find", "/", "Find", Shortcut::Find)
+                .on_press_tx(|s: &mut App, tx| s.run_shortcut(Shortcut::Find, tx)),
+        )
+        .child(
+            item(
+                "copy-output",
+                "▤",
+                "Copy Last Output",
+                Shortcut::CopyLastOutput,
+            )
+            .on_press_tx(|s: &mut App, tx| s.run_shortcut(Shortcut::CopyLastOutput, tx)),
+        )
+        .child(
+            item("clear", "⌫", "Clear", Shortcut::Clear)
+                .on_press_tx(|s: &mut App, tx| s.run_shortcut(Shortcut::Clear, tx)),
+        )
+        .child(el().grow(1.0))
+        .child(
+            item("open-settings", "◎", "Settings", Shortcut::Settings)
+                .on_press(|s: &mut App| s.open_settings(SettingsPane::Security)),
+        )
+}
+
+/// Numbered tabs (the ⌘1…9 targets) and the keys worth knowing.
+fn hint_bar(app: &App, ink: &Ink) -> El {
+    let numbered = app.sessions.iter().enumerate().take(9).map(|(i, s)| {
+        let id = s.id;
+        let active = Some(id) == app.selected;
+        row()
+            .key(format!("slot-{id}"))
+            .role("button")
+            .label(format!("Tab {}: {}", i + 1, s.title))
+            .hit()
+            .h_full()
+            .px(8.0)
+            .gap(6.0)
+            .center_y()
+            .hover(ink.hover)
+            .on_press(move |s: &mut App| s.select(id))
+            .child(
+                text(format!("{}", i + 1))
+                    .font(style(UI, 700.0))
+                    .color(if active { ink.accent } else { ink.tertiary }),
+            )
+            .child(
+                text(
+                    s.cwd
+                        .as_deref()
+                        .map(home_relative)
+                        .unwrap_or_else(|| s.title.clone()),
+                )
+                .font(style(UI, 450.0))
+                .color(if active { ink.green } else { ink.tertiary })
+                .truncate()
+                .max_w(200.0),
+            )
+    });
+    let hint = |shortcut: Shortcut, label: &str| {
+        row()
+            .gap(5.0)
+            .center_y()
+            .child(
+                text(shortcuts::label(shortcut))
+                    .font(style(11.5, 600.0))
+                    .color(ink.secondary),
+            )
+            .child(
+                text(label.to_owned())
+                    .font(style(11.5, 450.0))
+                    .color(ink.tertiary),
+            )
+    };
+    row()
+        .key("hints")
+        .w_full()
+        .h(BAR_HEIGHT)
+        .px(6.0)
+        .gap(4.0)
+        .center_y()
+        .fill(ink.surface(ink.panel))
+        .children(numbered)
+        .child(el().grow(1.0))
+        .child(
+            row()
+                .gap(16.0)
+                .pr(8.0)
+                .center_y()
+                .child(hint(Shortcut::CommandPalette, "palette"))
+                .child(hint(Shortcut::NewTab, "new"))
+                .child(hint(Shortcut::Find, "find"))
+                .child(hint(Shortcut::Settings, "settings")),
         )
 }
 
 // MARK: Sidebar
 
 fn section_title(title: &str, ink: &Ink) -> El {
-    text(title.to_uppercase())
-        .font(style(10.5, 650.0).tracking(0.6))
-        .color(ink.tertiary)
-        .px(10.0)
-        .pt(10.0)
-        .pb(4.0)
+    row()
+        .w_full()
+        .px(12.0)
+        .pt(12.0)
+        .pb(6.0)
+        .gap(8.0)
+        .center_y()
+        .child(
+            text(title.to_lowercase())
+                .font(style(11.5, 650.0))
+                .color(ink.accent),
+        )
+        .child(el().grow(1.0).h(1.0).fill(ink.hairline))
 }
 
 fn sidebar(app: &App, ink: &Ink) -> El {
-    let sessions = app.sessions.iter().map(|s| {
+    let sessions = app.sessions.iter().enumerate().map(|(i, s)| {
         let id = s.id;
         let selected = Some(id) == app.selected;
         let subtitle = s.cwd.as_deref().map(home_relative).unwrap_or_default();
@@ -434,44 +552,35 @@ fn sidebar(app: &App, ink: &Ink) -> El {
             .label(s.title.clone())
             .hit()
             .w_full()
-            .px(10.0)
-            .py(7.0)
+            .px(12.0)
+            .py(4.0)
             .gap(10.0)
-            .center_y()
-            .radius(10.0)
             .hover(ink.hover)
             .on_press(move |s: &mut App| s.select(id))
             .child(
-                row()
-                    .size(26.0, 26.0)
-                    .center()
-                    .radius(7.0)
-                    .fill(if selected { ink.accent } else { ink.selected })
-                    .child(
-                        text(">_")
-                            .font(style(10.5, 700.0).family(rune::tok::Family::Mono))
-                            .color(if selected {
-                                Color::WHITE
-                            } else {
-                                ink.secondary
-                            }),
-                    ),
+                text(if selected { "▸" } else { " " })
+                    .font(style(UI, 700.0))
+                    .color(ink.accent),
+            )
+            .child(
+                text(format!("{}", i + 1))
+                    .font(style(UI, 600.0))
+                    .color(ink.tertiary),
             )
             .child(
                 col()
                     .grow(1.0)
                     .min_w(0.0)
-                    .gap(1.0)
                     .child(
                         text(s.title.clone())
-                            .font(style(13.0, 550.0))
+                            .font(style(UI, if selected { 650.0 } else { 450.0 }))
                             .color(ink.text)
                             .truncate(),
                     )
                     .children((!subtitle.is_empty()).then(|| {
                         text(subtitle)
-                            .font(style(11.0, 450.0))
-                            .color(ink.secondary)
+                            .font(style(11.5, 450.0))
+                            .color(ink.tertiary)
                             .truncate_head()
                     })),
             );
@@ -487,10 +596,10 @@ fn sidebar(app: &App, ink: &Ink) -> El {
             .flatten()
             .collect::<Vec<_>>()
             .join("@");
-        let badge_bg = match h.credential {
-            Credential::SecureEnclave => ink.accent.alpha(0.22),
-            Credential::Agent => ink.green.alpha(0.22),
-            Credential::Other => ink.selected,
+        let badge = match h.credential {
+            Credential::SecureEnclave => ink.blue,
+            Credential::Agent => ink.green,
+            Credential::Other => ink.tertiary,
         };
         row()
             .key(format!("host-{alias}"))
@@ -499,93 +608,48 @@ fn sidebar(app: &App, ink: &Ink) -> El {
             .help(h.credential.help())
             .hit()
             .w_full()
-            .px(10.0)
-            .py(7.0)
+            .px(12.0)
+            .py(4.0)
             .gap(10.0)
-            .center_y()
-            .radius(10.0)
             .hover(ink.hover)
             .on_press(move |s: &mut App| s.open_host(&alias))
-            .child(
-                row()
-                    .size(26.0, 26.0)
-                    .center()
-                    .radius(7.0)
-                    .fill(ink.selected)
-                    .child(text("⇄").font(style(12.0, 600.0)).color(ink.secondary)),
-            )
+            .child(text("⇄").font(style(UI, 600.0)).color(ink.tertiary))
             .child(
                 col()
                     .grow(1.0)
                     .min_w(0.0)
-                    .gap(1.0)
                     .child(
                         text(h.alias.clone())
-                            .font(style(13.0, 550.0))
+                            .font(style(UI, 550.0))
                             .color(ink.text)
                             .truncate(),
                     )
                     .child(
                         text(subtitle)
-                            .font(style(11.0, 450.0))
-                            .color(ink.secondary)
+                            .font(style(11.5, 450.0))
+                            .color(ink.tertiary)
                             .truncate(),
                     ),
             )
-            .child(pill(h.credential.badge(), ink.text, badge_bg))
+            .child(pill(h.credential.badge(), badge, ink.hover))
     });
     let empty_hosts = app.hosts.is_empty().then(|| {
-        text("No hosts in ~/.ssh/config")
-            .font(style(12.0, 450.0))
-            .color(ink.secondary)
-            .px(10.0)
-            .py(6.0)
+        text("no hosts in ~/.ssh/config")
+            .font(style(11.5, 450.0))
+            .color(ink.tertiary)
+            .px(12.0)
+            .py(4.0)
     });
-    glass(
-        col()
-            .key("sidebar")
-            .w(gh::size::SIDEBAR_WIDTH)
-            .h_full()
-            .padding(8.0)
-            .gap(2.0),
-        ink,
-        PANE_RADIUS,
-        30.0,
-        ink.glass,
-    )
-    .child(section_title("Open Sessions", ink))
-    .children(sessions)
-    .child(section_title("Hosts", ink))
-    .children(hosts)
-    .children(empty_hosts)
-    .child(el().grow(1.0))
-    .child(
-        row()
-            .key("sidebar-settings")
-            .role("button")
-            .label("Settings")
-            .hit()
-            .w_full()
-            .px(10.0)
-            .py(8.0)
-            .gap(8.0)
-            .center_y()
-            .radius(10.0)
-            .hover(ink.hover)
-            .on_press(|s: &mut App| s.open_settings(crate::app::SettingsPane::Security))
-            .child(text("◎").font(style(13.0, 500.0)).color(ink.secondary))
-            .child(
-                text("Settings")
-                    .font(style(12.5, 500.0))
-                    .color(ink.secondary),
-            )
-            .child(el().grow(1.0))
-            .child(
-                text(shortcuts::label(Shortcut::Settings))
-                    .font(style(11.0, 500.0))
-                    .color(ink.tertiary),
-            ),
-    )
+    col()
+        .key("sidebar")
+        .w(SIDEBAR_WIDTH)
+        .h_full()
+        .fill(ink.surface(ink.bg))
+        .child(section_title("sessions", ink))
+        .children(sessions)
+        .child(section_title("hosts", ink))
+        .children(hosts)
+        .children(empty_hosts)
 }
 
 /// `/Users/me/src` → `~/src`.

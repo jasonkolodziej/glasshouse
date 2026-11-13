@@ -1,18 +1,19 @@
-//! Settings as a glass sheet: Security (Touch ID for sudo, Secure Keyboard Entry), SSH (Secure
-//! Enclave keys and Glasshouse's hosts) and Appearance (theme, cursor, window, contrast).
+//! Settings as a titled box: Security (Touch ID for sudo, Secure Keyboard Entry), SSH (Secure
+//! Enclave keys and Glasshouse's hosts) and Appearance (theme, cursor, window, contrast). Drawn
+//! like the rest of the window: monospace, `[x]` checkboxes, `(•)` radio sets, `[ buttons ]`.
 
 use glasshouse_security::TouchIDSudo;
 use rune::tok::Family;
-use rune::{Color, El, ScrollSpec, TextEdit, col, el, row, text, text_input};
+use rune::{El, ScrollSpec, TextEdit, col, el, row, text, text_input};
 use ssh_config::{ManagedSshHost, SshIncludeStatus};
 use terminal_theme::{ContrastLevel, CursorShape};
 
-use super::{Ink, button, glass, pill, style};
+use super::{Ink, UI, button, hrule, pill, style, titled, vrule};
 use crate::app::{App, HostDraft, SettingsPane, SettingsState};
 
-const WIDTH: f32 = 780.0;
-const HEIGHT: f32 = 560.0;
-const NAV: f32 = 190.0;
+const WIDTH: f32 = 860.0;
+const HEIGHT: f32 = 580.0;
+const NAV: f32 = 180.0;
 
 pub fn sheet(app: &App, ink: &Ink) -> El {
     let Some(settings) = &app.settings else {
@@ -21,7 +22,7 @@ pub fn sheet(app: &App, ink: &Ink) -> El {
     let (w, h) = if app.window.0 > 0.0 {
         app.window
     } else {
-        (1180.0, 740.0)
+        crate::SIZE
     };
     let (sw, sh) = (WIDTH.min(w - 40.0), HEIGHT.min(h - 40.0));
     let content = match settings.pane {
@@ -29,21 +30,18 @@ pub fn sheet(app: &App, ink: &Ink) -> El {
         SettingsPane::Ssh => ssh(settings, ink),
         SettingsPane::Appearance => appearance(app, settings, ink),
     };
-    glass(
+    titled(
         row()
             .key("settings")
             .role("dialog")
             .label("Settings")
             .absolute((w - sw) / 2.0, (h - sh) / 2.0)
             .size(sw, sh),
+        "settings",
         ink,
-        22.0,
-        36.0,
-        ink.glass_strong,
     )
-    .shadow(24.0, 70.0, ink.shadow)
-    .clip_rounded(22.0)
     .child(nav(settings.pane, ink))
+    .child(vrule(ink))
     .child(
         col()
             .grow(1.0)
@@ -52,21 +50,22 @@ pub fn sheet(app: &App, ink: &Ink) -> El {
             .child(
                 row()
                     .w_full()
-                    .h(54.0)
-                    .px(22.0)
+                    .h(40.0)
+                    .px(18.0)
+                    .pt(6.0)
                     .center_y()
-                    .border_sides([0.0, 0.0, 0.5, 0.0], ink.hairline)
                     .child(
                         text(pane_title(settings.pane))
-                            .font(style(17.0, 680.0))
+                            .font(style(14.0, 700.0))
                             .color(ink.text),
                     )
                     .child(el().grow(1.0))
                     .child(
-                        button("settings-done", "Done", ink, true)
+                        button("settings-done", "done", ink, true)
                             .on_press(|s: &mut App| s.settings = None),
                     ),
             )
+            .child(hrule(ink))
             .child(
                 col()
                     .key(format!("settings-scroll-{:?}", settings.pane))
@@ -76,21 +75,21 @@ pub fn sheet(app: &App, ink: &Ink) -> El {
                     .scroll(ScrollSpec {
                         stick_bottom: false,
                     })
-                    .child(col().w_full().padding(22.0).gap(18.0).child(content)),
+                    .child(col().w_full().padding(18.0).gap(16.0).child(content)),
             ),
     )
 }
 
 fn pane_title(pane: SettingsPane) -> &'static str {
     match pane {
-        SettingsPane::Security => "Security",
-        SettingsPane::Ssh => "SSH Keys and Hosts",
-        SettingsPane::Appearance => "Appearance",
+        SettingsPane::Security => "security",
+        SettingsPane::Ssh => "ssh keys and hosts",
+        SettingsPane::Appearance => "appearance",
     }
 }
 
 fn nav(current: SettingsPane, ink: &Ink) -> El {
-    let item = |pane: SettingsPane, glyph: &'static str, label: &'static str| {
+    let item = |pane: SettingsPane, n: &'static str, label: &'static str| {
         let on = pane == current;
         let mut r = row()
             .key(format!("nav-{label}"))
@@ -98,29 +97,22 @@ fn nav(current: SettingsPane, ink: &Ink) -> El {
             .label(label)
             .hit()
             .w_full()
-            .h(34.0)
+            .h(26.0)
             .px(10.0)
-            .gap(10.0)
+            .gap(8.0)
             .center_y()
-            .radius(9.0)
             .hover(ink.hover)
             .on_press(move |s: &mut App| s.open_settings(pane))
             .child(
-                row()
-                    .size(22.0, 22.0)
-                    .center()
-                    .radius(6.0)
-                    .fill(if on { ink.accent } else { ink.selected })
-                    .child(text(glyph).font(style(11.0, 700.0)).color(if on {
-                        Color::WHITE
-                    } else {
-                        ink.secondary
-                    })),
+                text(if on { "▸" } else { " " })
+                    .font(style(UI, 700.0))
+                    .color(ink.accent),
             )
+            .child(text(n).font(style(UI, 600.0)).color(ink.tertiary))
             .child(
                 text(label)
-                    .font(style(13.0, if on { 600.0 } else { 480.0 }))
-                    .color(ink.text),
+                    .font(style(UI, if on { 650.0 } else { 450.0 }))
+                    .color(if on { ink.text } else { ink.secondary }),
             );
         if on {
             r = r.fill(ink.selected);
@@ -130,60 +122,46 @@ fn nav(current: SettingsPane, ink: &Ink) -> El {
     col()
         .w(NAV)
         .h_full()
-        .padding(12.0)
-        .gap(3.0)
-        .fill(if ink.dark {
-            Color::BLACK.alpha(0.12)
-        } else {
-            Color::WHITE.alpha(0.25)
-        })
-        .border_sides([0.0, 0.5, 0.0, 0.0], ink.hairline)
-        .child(
-            text("Settings")
-                .font(style(12.0, 650.0))
-                .color(ink.tertiary)
-                .px(10.0)
-                .pt(6.0)
-                .pb(8.0),
-        )
-        .child(item(SettingsPane::Security, "◉", "Security"))
-        .child(item(SettingsPane::Ssh, "◆", "SSH"))
-        .child(item(SettingsPane::Appearance, "◐", "Appearance"))
+        .pt(18.0)
+        .gap(2.0)
+        .fill(ink.surface(ink.panel))
+        .child(item(SettingsPane::Security, "1", "security"))
+        .child(item(SettingsPane::Ssh, "2", "ssh"))
+        .child(item(SettingsPane::Appearance, "3", "appearance"))
 }
 
 // MARK: Building blocks
 
+/// `── title ─────────`, then the section's rows.
 fn section(title: &str, ink: &Ink) -> El {
-    col().w_full().gap(8.0).child(
-        text(title.to_owned())
-            .font(style(12.0, 650.0))
-            .color(ink.secondary),
+    col().w_full().gap(6.0).child(
+        row()
+            .w_full()
+            .gap(8.0)
+            .center_y()
+            .child(text("──").font(style(UI, 500.0)).color(ink.hairline))
+            .child(
+                text(title.to_lowercase())
+                    .font(style(UI, 650.0))
+                    .color(ink.accent),
+            )
+            .child(el().grow(1.0).h(1.0).fill(ink.hairline)),
     )
 }
 
-/// A grouped list on a slightly lifted surface.
-fn group(ink: &Ink) -> El {
-    col()
-        .w_full()
-        .radius(12.0)
-        .fill(if ink.dark {
-            Color::WHITE.alpha(0.05)
-        } else {
-            Color::WHITE.alpha(0.55)
-        })
-        .border(0.5, ink.hairline)
+/// Rows of a section, indented under its title.
+fn group(_ink: &Ink) -> El {
+    col().w_full().pl(16.0)
 }
 
-fn line(ink: &Ink) -> El {
+fn line(_ink: &Ink) -> El {
     row()
         .w_full()
         .min_w(0.0)
-        .min_h(40.0)
-        .px(14.0)
-        .py(8.0)
+        .min_h(28.0)
+        .py(2.0)
         .gap(10.0)
         .center_y()
-        .border_sides([0.0, 0.0, 0.5, 0.0], ink.hairline)
 }
 
 fn note(s: impl Into<String>, ink: &Ink) -> El {
@@ -191,54 +169,54 @@ fn note(s: impl Into<String>, ink: &Ink) -> El {
         .w_full()
         .wrap()
         .font(style(11.5, 450.0))
-        .color(ink.secondary)
+        .color(ink.tertiary)
+        .pl(16.0)
 }
 
 fn label(s: impl Into<String>, ink: &Ink) -> El {
-    text(s.into()).font(style(13.0, 450.0)).color(ink.text)
+    text(s.into()).font(style(UI, 450.0)).color(ink.text)
 }
 
 fn status(ok: bool, s: impl Into<String>, ink: &Ink) -> El {
     row()
-        .gap(7.0)
+        .gap(8.0)
         .center_y()
         .child(
-            text(if ok { "●" } else { "▲" })
-                .font(style(10.0, 700.0))
+            text(if ok { "✓" } else { "!" })
+                .font(style(UI, 700.0))
                 .color(if ok { ink.green } else { ink.orange }),
         )
-        .child(text(s.into()).font(style(13.0, 500.0)).color(ink.text))
+        .child(text(s.into()).font(style(UI, 500.0)).color(ink.text))
 }
 
-/// A switch: track and knob, the knob's side and the track's fill both say on or off.
+/// `[x]` / `[ ]`.
 fn toggle(key: &str, on: bool, ink: &Ink, set: fn(&mut App, bool)) -> El {
-    let knob = el().size(18.0, 18.0).radius(9.0).fill(Color::WHITE).shadow(
-        1.0,
-        3.0,
-        Color::BLACK.alpha(0.25),
-    );
     row()
         .key(key)
         .role("switch")
         .label(key.to_owned())
         .hit()
-        .w(36.0)
-        .h(22.0)
-        .padding(2.0)
-        .radius(11.0)
-        .fill(if on { ink.accent } else { ink.selected })
+        .h(24.0)
+        .px(2.0)
+        .center_y()
+        .hover(ink.hover)
         .on_press(move |s: &mut App| set(s, !on))
-        .children((on).then(|| el().grow(1.0)))
-        .child(knob)
+        .child(text("[").font(style(UI, 500.0)).color(ink.tertiary))
+        .child(
+            text(if on { "x" } else { " " })
+                .font(style(UI, 800.0))
+                .color(ink.accent),
+        )
+        .child(text("]").font(style(UI, 500.0)).color(ink.tertiary))
 }
 
 fn toggle_row(title: &str, key: &str, on: bool, ink: &Ink, set: fn(&mut App, bool)) -> El {
     line(ink)
-        .child(label(title, ink).grow(1.0).wrap())
         .child(toggle(key, on, ink, set))
+        .child(label(title, ink).grow(1.0).min_w(0.0).wrap())
 }
 
-/// A segmented control over `options`.
+/// `(•) one  ( ) two  ( ) three`.
 fn segmented<T: Copy + PartialEq + 'static>(
     key: &str,
     options: &[(T, &'static str)],
@@ -248,41 +226,32 @@ fn segmented<T: Copy + PartialEq + 'static>(
 ) -> El {
     let segments = options.iter().map(|&(value, name)| {
         let on = value == current;
-        let mut seg = row()
+        row()
             .key(format!("{key}-{name}"))
             .role("radio")
             .label(name)
             .hit()
             .h(24.0)
-            .px(12.0)
-            .center()
-            .radius(7.0)
+            .px(4.0)
+            .gap(6.0)
+            .center_y()
+            .hover(ink.hover)
             .on_press(move |s: &mut App| set(s, value))
             .child(
-                text(name)
-                    .font(style(12.0, if on { 600.0 } else { 480.0 }))
-                    .color(ink.text),
-            );
-        if on {
-            seg = seg
-                .fill(if ink.dark {
-                    Color::WHITE.alpha(0.18)
-                } else {
-                    Color::WHITE
-                })
-                .shadow(1.0, 3.0, ink.shadow);
-        }
-        seg
+                text(if on { "(•)" } else { "( )" })
+                    .font(style(UI, 700.0))
+                    .color(if on { ink.accent } else { ink.tertiary }),
+            )
+            .child(
+                text(name.to_lowercase())
+                    .font(style(UI, if on { 650.0 } else { 450.0 }))
+                    .color(if on { ink.text } else { ink.secondary }),
+            )
     });
-    row()
-        .key(key)
-        .padding(2.0)
-        .gap(2.0)
-        .radius(9.0)
-        .fill(ink.selected)
-        .children(segments)
+    row().key(key).gap(10.0).children(segments)
 }
 
+/// `› value` over an underline.
 fn field(
     key: &str,
     edit: &TextEdit,
@@ -291,19 +260,16 @@ fn field(
     bind: fn(&mut App) -> &mut TextEdit,
 ) -> El {
     row()
-        .w(220.0)
-        .h(28.0)
-        .px(10.0)
+        .w(240.0)
+        .h(26.0)
+        .px(6.0)
+        .gap(6.0)
         .center_y()
-        .radius(8.0)
-        .fill(if ink.dark {
-            Color::BLACK.alpha(0.25)
-        } else {
-            Color::WHITE.alpha(0.8)
-        })
-        .border(0.5, ink.hairline)
+        .fill(ink.surface(ink.panel))
+        .border_sides([0.0, 0.0, 1.0, 0.0], ink.rule)
+        .child(text("›").font(style(UI, 700.0)).color(ink.accent))
         .child(
-            text_input(edit, style(13.0, 450.0).lh(18.0))
+            text_input(edit, style(UI, 500.0).lh(18.0))
                 .key(key)
                 .single_line()
                 .grow(1.0)
@@ -645,7 +611,7 @@ fn host_row(host: &ManagedSshHost, ink: &Ink) -> El {
                 .hit()
                 .size(28.0, 28.0)
                 .center()
-                .radius(14.0)
+                .radius(0.0)
                 .hover(ink.red.alpha(0.15))
                 .on_press({
                     let alias = remove.clone();
@@ -760,8 +726,8 @@ fn appearance(app: &App, s: &SettingsState, ink: &Ink) -> El {
         let in_use = theme.id == current.theme.id;
         let id = theme.id.clone();
         let dots = [1usize, 2, 3, 4, 5, 6].map(|i| {
-            el().size(8.0, 8.0)
-                .radius(4.0)
+            el().size(12.0, 10.0)
+                .radius(0.0)
                 .fill(super::color(crate::appearance::rgba(ansi[i])))
         });
         let mut card = col()
@@ -788,7 +754,7 @@ fn appearance(app: &App, s: &SettingsState, ink: &Ink) -> El {
                     .h(70.0)
                     .padding(9.0)
                     .gap(6.0)
-                    .radius(10.0)
+                    .radius(0.0)
                     .fill(bg)
                     .border(
                         if in_use { 2.0 } else { 0.5 },

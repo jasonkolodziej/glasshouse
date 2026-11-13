@@ -229,7 +229,13 @@ impl Session {
             changed = true;
             match event {
                 EngineEvent::Shell { event, row } => self.handle_shell(&event, row, &mut notes),
-                EngineEvent::Title(t) => self.title = sanitize_title(&t),
+                EngineEvent::Title(t) => {
+                    // An empty title (a reset, or a theme re-apply) keeps the tab's name.
+                    let title = sanitize_title(&t);
+                    if !title.trim().is_empty() {
+                        self.title = title;
+                    }
+                }
                 EngineEvent::OutputActivity | EngineEvent::Resized { .. } => activity = true,
                 EngineEvent::Bell => notes.push(SessionNote::Bell),
                 EngineEvent::ClipboardStore(text) => notes.push(SessionNote::Clipboard(text)),
@@ -256,7 +262,8 @@ impl Session {
             ShellEvent::OutputStart => {
                 if let Some(start) = self.input_start_row {
                     // Command text between B and C — display data only, never used for trust.
-                    let text = self.engine.text(start, row + 1);
+                    // C arrives after the newline, so the command is the rows from B up to, not including, C.
+                    let text = self.engine.text(start, row.max(start + 1));
                     self.timeline.set_command_line(&text);
                 }
             }
