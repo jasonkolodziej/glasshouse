@@ -239,13 +239,11 @@ fn status_line(app: &App, session: &Session, ink: &Ink) -> El {
             .color(c)
     });
     let commands = session.timeline.commands().len();
-    let shell = std::path::Path::new(&std::env::var("SHELL").unwrap_or_else(|_| "sh".into()))
-        .file_name()
-        .map_or_else(|| "sh".to_owned(), |n| n.to_string_lossy().into_owned());
+    // The tab's own program, not this machine's $SHELL: a host tab runs ssh.
     let kind = if matches!(session.trust, TrustState::RemoteSession(_)) {
         "ssh".to_owned()
     } else {
-        shell
+        session.shell.clone()
     };
     let fact = |s: String| text(s).font(style(UI, 500.0)).color(ink.secondary);
     let _ = app;

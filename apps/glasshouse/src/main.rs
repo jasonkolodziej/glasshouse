@@ -3,7 +3,7 @@
 //! ```sh
 //! cargo run -p glasshouse                                   # a live shell
 //! cargo run -p glasshouse -- --demo                         # scripted tabs, no shell (screenshots, demos)
-//! cargo run -p glasshouse -- --snap shot.png --scene palette --scale 2
+//! cargo run -p glasshouse -- --snap shot.png --scene palette --scale 2 --at 0.5
 //! ```
 //!
 //! Scenes (`--scene NAME`): `terminal`, `sidebar`, `palette`, `approval`, `find`, `settings`,

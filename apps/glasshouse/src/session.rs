@@ -70,6 +70,8 @@ pub struct Session {
     engine: PtyTerminal,
     events: Receiver<EngineEvent>,
     pub title: String,
+    /// The program the tab runs, as the status line names it: `zsh`, `bash`, `fish` or `ssh`.
+    pub shell: String,
     pub cwd: Option<String>,
     pub exited: bool,
     pub exit_code: Option<i32>,
@@ -149,6 +151,7 @@ impl Session {
             engine,
             events,
             title: title.to_owned(),
+            shell: program_name(&plan.executable),
             cwd: None,
             exited: start_error.is_some(),
             exit_code: None,
@@ -185,6 +188,8 @@ impl Session {
             engine,
             events,
             title: title.to_owned(),
+            // Demo tabs show what a Mac runs by default.
+            shell: "zsh".to_owned(),
             cwd: None,
             exited: false,
             exit_code: None,
@@ -434,6 +439,15 @@ impl Session {
     }
 }
 
+/// `/bin/zsh` → `zsh`, `-zsh` → `zsh`.
+pub fn program_name(executable: &str) -> String {
+    let name = Path::new(executable)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(executable);
+    name.trim_start_matches('-').to_owned()
+}
+
 /// Program-set titles (OSC 0/2) never reach trusted chrome; strip glyphs that imitate it anyway.
 pub fn sanitize_title(raw: &str) -> String {
     const BANNED: [char; 7] = ['🔒', '🔐', '🔑', '🛡', '✅', '☑', '✔'];
@@ -476,6 +490,13 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn program_name_should_be_the_executable_file_name() {
+        assert_eq!(program_name("/bin/zsh"), "zsh");
+        assert_eq!(program_name("/usr/bin/ssh"), "ssh");
+        assert_eq!(program_name("-fish"), "fish");
     }
 
     #[test]

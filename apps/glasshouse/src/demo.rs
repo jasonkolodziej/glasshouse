@@ -78,16 +78,16 @@ fn main_transcript() -> String {
     t += &command(
         "~/src/glasshouse",
         "ls",
-        "\x1b[1;34mGlasshouse\x1b[0m  \x1b[1;34mapps\x1b[0m  \x1b[1;34mcrates\x1b[0m  \x1b[1;34mdocs\x1b[0m  Cargo.lock  Cargo.toml  LICENSE  README.md  rust-toolchain.toml\n",
+        "Cargo.lock  \x1b[1;34mGlasshouse\x1b[0m  README.md  \x1b[1;34mcrates\x1b[0m  rust-toolchain.toml\nCargo.toml  LICENSE     \x1b[1;34mapps\x1b[0m       \x1b[1;34mdocs\x1b[0m\n",
         0,
     );
     t += &command(
         "~/src/glasshouse",
         "cargo test --workspace -q",
         "\n\x1b[1mrunning 214 tests\x1b[0m\n\
-         ........................................................................................ 88/214\n\
-         ........................................................................................ 176/214\n\
-         ......................................\n\
+         ........................................................................ 72/214\n\
+         ........................................................................ 144/214\n\
+         ...................................................................... 214/214\n\
          test result: \x1b[1;32mok\x1b[0m. 214 passed; 0 failed; 0 ignored; finished in 1.84s\n\n",
         0,
     );

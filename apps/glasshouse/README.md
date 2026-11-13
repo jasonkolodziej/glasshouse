@@ -49,9 +49,10 @@ terminal engines fed recorded output, so no shell is spawned. The scenes are `te
 `sidebar`, `palette`, `approval`, `find`, `settings`, `ssh`, `appearance`, `light`, `solid` and `hero` (the window floating on the wallpaper, for this README).
 
 ```sh
-cargo run -p glasshouse -- --snap docs/screenshots/palette.png --scene palette --scale 2 --theme dark
+cargo run -p glasshouse -- --snap docs/screenshots/palette.png --scene palette --scale 2 --theme dark --at 0.5
 ```
 
+`--at 0.5` takes the picture half a second into the scene, after the grid has resized to the pane.
 Without a GPU, install Mesa's software Vulkan (`mesa-vulkan-drivers`).
 
 ## Layout
