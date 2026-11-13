@@ -3737,6 +3737,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "shell-integration",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
