@@ -28,8 +28,20 @@ pub struct PaletteItem {
 }
 
 impl PaletteItem {
-    fn new(title: impl Into<String>, icon: &'static str, kind: impl Into<String>, action: PaletteAction) -> Self {
-        PaletteItem { title: title.into(), subtitle: None, icon, shortcut: None, kind: kind.into(), action }
+    fn new(
+        title: impl Into<String>,
+        icon: &'static str,
+        kind: impl Into<String>,
+        action: PaletteAction,
+    ) -> Self {
+        PaletteItem {
+            title: title.into(),
+            subtitle: None,
+            icon,
+            shortcut: None,
+            kind: kind.into(),
+            action,
+        }
     }
 
     fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
@@ -59,20 +71,56 @@ pub struct PaletteTab<'a> {
 }
 
 /// Every item, in the Swift app's order: actions, hosts, tabs, then up to 20 distinct recent commands.
-pub fn all_items(hosts: &[PaletteHost<'_>], tabs: &[PaletteTab<'_>], recent: &[&str]) -> Vec<PaletteItem> {
+pub fn all_items(
+    hosts: &[PaletteHost<'_>],
+    tabs: &[PaletteTab<'_>],
+    recent: &[&str],
+) -> Vec<PaletteItem> {
     let mut items = vec![
-        PaletteItem::new("New Tab", "+", "Action", PaletteAction::NewTab).shortcut(label(Shortcut::NewTab)),
-        PaletteItem::new("Copy Last Output", "⧉", "Action", PaletteAction::CopyLastOutput).shortcut(label(Shortcut::CopyLastOutput)),
-        PaletteItem::new("Toggle Sessions Sidebar", "▤", "Action", PaletteAction::ToggleSidebar).shortcut(label(Shortcut::ToggleSidebar)),
-        PaletteItem::new("Set Up Touch ID for sudo…", "◉", "Security", PaletteAction::SetUpTouchId)
-            .subtitle("Runs a visible, reviewable script"),
-        PaletteItem::new("Manage SSH Keys and Hosts…", "⚿", "Security", PaletteAction::ManageSshKeys)
-            .subtitle("Secure Enclave keys that ask for Touch ID"),
+        PaletteItem::new("New Tab", "+", "Action", PaletteAction::NewTab)
+            .shortcut(label(Shortcut::NewTab)),
+        PaletteItem::new(
+            "Copy Last Output",
+            "◫",
+            "Action",
+            PaletteAction::CopyLastOutput,
+        )
+        .shortcut(label(Shortcut::CopyLastOutput)),
+        PaletteItem::new(
+            "Toggle Sessions Sidebar",
+            "▤",
+            "Action",
+            PaletteAction::ToggleSidebar,
+        )
+        .shortcut(label(Shortcut::ToggleSidebar)),
+        PaletteItem::new(
+            "Set Up Touch ID for sudo…",
+            "◉",
+            "Security",
+            PaletteAction::SetUpTouchId,
+        )
+        .subtitle("Runs a visible, reviewable script"),
+        PaletteItem::new(
+            "Manage SSH Keys and Hosts…",
+            "◆",
+            "Security",
+            PaletteAction::ManageSshKeys,
+        )
+        .subtitle("Secure Enclave keys that ask for Touch ID"),
     ];
     items.extend(hosts.iter().map(|h| {
-        let subtitle = [h.user, h.host_name].into_iter().flatten().collect::<Vec<_>>().join("@");
-        PaletteItem::new(h.alias, "▣", format!("Host · {}", h.credential), PaletteAction::OpenHost(h.alias.into()))
-            .subtitle(subtitle)
+        let subtitle = [h.user, h.host_name]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("@");
+        PaletteItem::new(
+            h.alias,
+            "▣",
+            format!("Host · {}", h.credential),
+            PaletteAction::OpenHost(h.alias.into()),
+        )
+        .subtitle(subtitle)
     }));
     items.extend(tabs.iter().map(|t| {
         let item = PaletteItem::new(t.title, ">_", "Tab", PaletteAction::SelectTab(t.id));
@@ -110,7 +158,11 @@ pub fn rank(items: Vec<PaletteItem>, query: &str) -> Vec<PaletteItem> {
                 0
             } else if title.contains(&q) {
                 1
-            } else if item.subtitle.as_ref().is_some_and(|s| s.to_lowercase().contains(&q)) {
+            } else if item
+                .subtitle
+                .as_ref()
+                .is_some_and(|s| s.to_lowercase().contains(&q))
+            {
                 2
             } else {
                 return None;
@@ -133,8 +185,17 @@ mod tests {
     #[test]
     fn rank_should_order_prefix_before_contains_before_subtitle() {
         let items = all_items(
-            &[PaletteHost { alias: "tabby", user: None, host_name: Some("x.example"), credential: "SE" }],
-            &[PaletteTab { id: 1, title: "build", cwd: Some("/tmp/tab") }],
+            &[PaletteHost {
+                alias: "tabby",
+                user: None,
+                host_name: Some("x.example"),
+                credential: "SE",
+            }],
+            &[PaletteTab {
+                id: 1,
+                title: "build",
+                cwd: Some("/tmp/tab"),
+            }],
             &[],
         );
         let ranked = rank(items, "tab");
@@ -149,16 +210,27 @@ mod tests {
 
     #[test]
     fn all_items_should_deduplicate_recent_commands_and_cap_them_at_twenty() {
-        let recent: Vec<String> = (0..30).map(|i| format!("cmd{i}")).chain(["cmd0".into()]).collect();
+        let recent: Vec<String> = (0..30)
+            .map(|i| format!("cmd{i}"))
+            .chain(["cmd0".into()])
+            .collect();
         let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-        let recents = all_items(&[], &[], &refs).into_iter().filter(|i| i.kind == "Recent").count();
+        let recents = all_items(&[], &[], &refs)
+            .into_iter()
+            .filter(|i| i.kind == "Recent")
+            .count();
         assert_eq!(recents, 20);
     }
 
     #[test]
     fn host_subtitle_should_join_user_and_host_name() {
         let items = all_items(
-            &[PaletteHost { alias: "a", user: Some("me"), host_name: Some("h"), credential: "Key" }],
+            &[PaletteHost {
+                alias: "a",
+                user: Some("me"),
+                host_name: Some("h"),
+                credential: "Key",
+            }],
             &[],
             &[],
         );

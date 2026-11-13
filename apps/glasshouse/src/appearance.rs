@@ -3,7 +3,9 @@
 
 use design_system::{ContrastPolicy, Rgba, apca};
 use terminal_core::{TerminalAppearance, TerminalCursorShape};
-use terminal_theme::{AppearanceConfig, ContrastLevel, CursorShape, ResolvedAppearance, ThemeColor, ThemeStore};
+use terminal_theme::{
+    AppearanceConfig, ContrastLevel, CursorShape, ResolvedAppearance, ThemeColor, ThemeStore,
+};
 
 /// Black/white slots are exempt: they are *meant* to match or invert the background.
 const EXEMPT_SLOTS: [usize; 4] = [0, 7, 8, 15];
@@ -43,7 +45,10 @@ fn shape(shape: CursorShape) -> TerminalCursorShape {
 }
 
 /// The engine appearance for `resolved`, with the contrast floor and accessibility overrides applied.
-pub fn terminal_appearance(resolved: &ResolvedAppearance, a11y: Accessibility) -> TerminalAppearance {
+pub fn terminal_appearance(
+    resolved: &ResolvedAppearance,
+    a11y: Accessibility,
+) -> TerminalAppearance {
     let policy = contrast_policy(resolved.contrast, a11y.increase_contrast);
     let colors = &resolved.theme.colors;
     let opaque = |c: ThemeColor| rgba(c).with_alpha(1.0);
@@ -66,7 +71,8 @@ pub fn terminal_appearance(resolved: &ResolvedAppearance, a11y: Accessibility) -
         resolved.opacity as f32
     };
 
-    let mut appearance = TerminalAppearance::new(foreground, bg, colors.cursor.map_or(ACCENT, rgba), ansi);
+    let mut appearance =
+        TerminalAppearance::new(foreground, bg, colors.cursor.map_or(ACCENT, rgba), ansi);
     appearance.font_name.clone_from(&resolved.font_family);
     appearance.font_size = resolved.font_size as f32;
     appearance.cursor_text = colors.cursor_text.map(rgba);
@@ -131,7 +137,11 @@ impl ThemeLibrary {
     }
 
     pub fn resolved(&self, dark: bool) -> ResolvedAppearance {
-        let fallback = if dark { "glasshouse-dark" } else { "glasshouse-light" };
+        let fallback = if dark {
+            "glasshouse-dark"
+        } else {
+            "glasshouse-light"
+        };
         let chosen = self
             .theme(self.config.theme.theme_id(dark))
             .or_else(|| self.theme(fallback))
@@ -143,7 +153,10 @@ impl ThemeLibrary {
     }
 
     /// Changes `appearance.yaml`. An invalid change is not saved, and the error says why.
-    pub fn update_config(&mut self, change: impl FnOnce(&mut AppearanceConfig)) -> Result<(), String> {
+    pub fn update_config(
+        &mut self,
+        change: impl FnOnce(&mut AppearanceConfig),
+    ) -> Result<(), String> {
         let mut updated = self.config.clone();
         change(&mut updated);
         let updated = updated.validated().map_err(|e| e.to_string())?;
@@ -187,8 +200,16 @@ mod tests {
         let r = resolved("glasshouse-dark");
         let a = terminal_appearance(&r, Accessibility::default());
         let floor = ContrastPolicy::STANDARD.palette_minimum;
-        for (i, c) in a.ansi.iter().enumerate().filter(|(i, _)| !EXEMPT_SLOTS.contains(i)) {
-            assert!(apca::contrast(*c, a.background).abs() >= floor - 0.5, "slot {i}");
+        for (i, c) in a
+            .ansi
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !EXEMPT_SLOTS.contains(i))
+        {
+            assert!(
+                apca::contrast(*c, a.background).abs() >= floor - 0.5,
+                "slot {i}"
+            );
         }
     }
 
@@ -203,7 +224,10 @@ mod tests {
     fn terminal_appearance_should_force_opaque_with_reduce_transparency() {
         let mut r = resolved("glasshouse-dark");
         r.opacity = 0.6;
-        let a11y = Accessibility { increase_contrast: false, reduce_transparency: true };
+        let a11y = Accessibility {
+            increase_contrast: false,
+            reduce_transparency: true,
+        };
         assert_eq!(terminal_appearance(&r, a11y).background_opacity, 1.0);
     }
 

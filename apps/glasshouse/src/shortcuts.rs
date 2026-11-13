@@ -143,7 +143,11 @@ pub fn label_for(shortcut: Shortcut, mac: bool) -> &'static str {
 /// Call only after `shortcut` returned `None`.
 pub fn terminal_key(ev: &KeyEvent) -> Option<(TermKey, Modifiers)> {
     let m = ev.mods;
-    let mods = Modifiers { shift: m.shift, control: m.ctrl, alt: m.alt };
+    let mods = Modifiers {
+        shift: m.shift,
+        control: m.ctrl,
+        alt: m.alt,
+    };
     let key = match &ev.key {
         Key::Text(t) => TermKey::Text(t.clone()),
         // Off macOS, Ctrl+letter arrives as a command chord; to the shell it is a control character.
@@ -175,12 +179,24 @@ mod tests {
     use super::*;
 
     fn ev(key: Key, shift: bool, cmd: bool, ctrl: bool) -> KeyEvent {
-        KeyEvent { key, mods: Mods { shift, cmd, alt: false, ctrl, logo: cmd && !ctrl } }
+        KeyEvent {
+            key,
+            mods: Mods {
+                shift,
+                cmd,
+                alt: false,
+                ctrl,
+                logo: cmd && !ctrl,
+            },
+        }
     }
 
     #[test]
     fn mac_cmd_t_should_open_a_new_tab() {
-        assert_eq!(shortcut_for(&ev(Key::Command('t'), false, true, false), true), Some(Shortcut::NewTab));
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('t'), false, true, false), true),
+            Some(Shortcut::NewTab)
+        );
     }
 
     #[test]
@@ -203,22 +219,32 @@ mod tests {
     fn linux_ctrl_c_should_go_to_the_shell() {
         let e = ev(Key::Command('c'), false, true, true);
         assert_eq!(shortcut_for(&e, false), None);
-        assert_eq!(terminal_key(&e).map(|(k, _)| k), Some(TermKey::Text("c".into())));
+        assert_eq!(
+            terminal_key(&e).map(|(k, _)| k),
+            Some(TermKey::Text("c".into()))
+        );
     }
 
     #[test]
     fn linux_ctrl_shift_t_should_open_a_new_tab() {
-        assert_eq!(shortcut_for(&ev(Key::Command('t'), true, true, true), false), Some(Shortcut::NewTab));
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('t'), true, true, true), false),
+            Some(Shortcut::NewTab)
+        );
     }
 
     #[test]
     fn linux_ctrl_shift_up_should_jump_to_previous_prompt() {
-        assert_eq!(shortcut_for(&ev(Key::Up, true, true, true), false), Some(Shortcut::PreviousPrompt));
+        assert_eq!(
+            shortcut_for(&ev(Key::Up, true, true, true), false),
+            Some(Shortcut::PreviousPrompt)
+        );
     }
 
     #[test]
     fn terminal_key_should_carry_control_for_mac_ctrl_letters() {
-        let (_, mods) = terminal_key(&ev(Key::Text("c".into()), false, false, true)).expect("a terminal key");
+        let (_, mods) =
+            terminal_key(&ev(Key::Text("c".into()), false, false, true)).expect("a terminal key");
         assert!(mods.control);
     }
 

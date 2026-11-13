@@ -241,6 +241,19 @@ impl PtyTerminal {
         self.term().scroll_display(Scroll::Delta(delta));
     }
 
+    /// Processes `bytes` as if the PTY had produced them, without a shell: demo sessions and
+    /// headless snapshots. OSC 133 marks become [`EngineEvent::Shell`] events as usual.
+    pub fn feed(&self, bytes: &[u8]) {
+        let mut state = ReaderState {
+            term: Arc::clone(&self.term),
+            outbox: Arc::clone(&self.outbox),
+            processor: ansi::Processor::new(),
+            scanner: OscScanner::new(),
+            master_fd: None,
+        };
+        state.process(bytes);
+    }
+
     /// Returns to the live screen.
     pub fn scroll_to_bottom(&self) {
         self.term().scroll_display(Scroll::Bottom);

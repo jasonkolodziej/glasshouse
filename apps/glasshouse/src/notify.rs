@@ -15,14 +15,22 @@ pub fn command_finished_text(tab: &str, record: &CommandRecord) -> (String, Stri
     };
     let command = record.command_line.as_deref().unwrap_or("command");
     let seconds = record.duration().map_or(0.0, |d| d.as_secs_f64());
-    (tab.to_owned(), format!("{status} {command} · {seconds:.0}s"))
+    (
+        tab.to_owned(),
+        format!("{status} {command} · {seconds:.0}s"),
+    )
 }
 
 /// (title, body) for a sudo prompt waiting in a hidden tab.
 pub fn approval_waiting_text(tab: &str, ctx: &ApprovalContext) -> (String, String) {
     (
         format!("{tab}: waiting for Touch ID"),
-        format!("sudo {} (as {}) · source: {}", ctx.command, ctx.run_as, ctx.source.as_str()),
+        format!(
+            "sudo {} (as {}) · source: {}",
+            ctx.command,
+            ctx.run_as,
+            ctx.source.as_str()
+        ),
     )
 }
 
@@ -42,7 +50,11 @@ pub fn post(title: &str, body: &str) {
         c.args(["--app-name=Glasshouse", "--", title, body]);
         c
     };
-    let spawned = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    let spawned = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
     if let Ok(mut child) = spawned {
         // Reap off the UI thread so the child doesn't linger as a zombie.
         std::thread::spawn(move || child.wait());
@@ -79,7 +91,13 @@ mod tests {
         timeline.set_command_line("make test");
         timeline.apply_at(&ShellEvent::OutputStart, 1, start);
         timeline
-            .apply_at(&ShellEvent::CommandFinished { exit_code: Some(exit) }, 5, start + Duration::from_secs(seconds))
+            .apply_at(
+                &ShellEvent::CommandFinished {
+                    exit_code: Some(exit),
+                },
+                5,
+                start + Duration::from_secs(seconds),
+            )
             .expect("a finished record")
     }
 
@@ -93,7 +111,10 @@ mod tests {
 
     #[test]
     fn command_finished_text_should_show_the_exit_status_for_failure() {
-        assert_eq!(command_finished_text("build", &finished(2, 7)).1, "✗ exit 2 make test · 7s");
+        assert_eq!(
+            command_finished_text("build", &finished(2, 7)).1,
+            "✗ exit 2 make test · 7s"
+        );
     }
 
     #[test]

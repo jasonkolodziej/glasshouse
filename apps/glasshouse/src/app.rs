@@ -7,10 +7,10 @@ use glasshouse_security::{SecureKeyboardEntry, TouchIDSudo, TouchIDSudoStatus};
 use rune::{KeyEvent, LiveRegion, TextEdit, Tx, Waker};
 use shell_integration::CommandRecord;
 use ssh_config::{
-    ManagedSshConfig, ManagedSshHost, SshConfigConflict, SshConfigStore, SshIncludeStatus, SshKeyFile,
-    glasshouse_ssh_scripts,
+    ManagedSshConfig, ManagedSshHost, SshConfigConflict, SshConfigStore, SshIncludeStatus,
+    SshKeyFile, glasshouse_ssh_scripts,
 };
-use terminal_core::{GridSize, TerminalAppearance};
+use terminal_core::{GridSize, TerminalAppearance, TerminalEngine};
 
 use crate::appearance::{Accessibility, ThemeLibrary, terminal_appearance};
 use crate::hosts::{self, SshHost};
@@ -89,7 +89,13 @@ impl HostDraft {
     pub fn host(&self) -> ManagedSshHost {
         let port_text = self.port.text.trim();
         let port = (!port_text.is_empty()).then(|| port_text.parse::<i64>().unwrap_or(-1));
-        ManagedSshHost::new(&self.alias.text, &self.host_name.text, Some(&self.user.text), port, &self.key_name)
+        ManagedSshHost::new(
+            &self.alias.text,
+            &self.host_name.text,
+            Some(&self.user.text),
+            port,
+            &self.key_name,
+        )
     }
 }
 
@@ -198,6 +204,13 @@ pub struct App {
     pub hovered_tick: Option<usize>,
     pub blink_on: bool,
     pub secure_always: bool,
+    /// The window's size in points, from layout (the wallpaper places its light by it).
+    pub window: (f32, f32),
+    /// Where an edit lands if its field's overlay closed between the event and the handler.
+    pub scratch: TextEdit,
+    pub scratch_draft: Option<HostDraft>,
+    /// The system appearance the last view saw; `poll` applies it (the view can't mutate state).
+    pub seen_env: std::cell::Cell<Option<SystemEnv>>,
     /// Started by `setup`: until then (headless snapshots) no shell is spawned.
     started: bool,
     had_tabs: bool,
@@ -217,7 +230,10 @@ impl App {
             next_id: 1,
             waker: None,
             themes,
-            env: SystemEnv { dark: true, increase_contrast: false },
+            env: SystemEnv {
+                dark: true,
+                increase_contrast: false,
+            },
             cell: None,
             pane_size: (0.0, 0.0),
             show_sidebar: false,
@@ -230,9 +246,36 @@ impl App {
             hovered_tick: None,
             blink_on: true,
             secure_always: false,
+            window: (0.0, 0.0),
+            scratch: TextEdit::new(""),
+            scratch_draft: None,
+            seen_env: std::cell::Cell::new(None),
             started: false,
             had_tabs: false,
         }
+    }
+
+    /// A live window (shells spawn), not a snapshot scene or the demo.
+    pub fn is_live(&self) -> bool {
+        self.started
+    }
+
+    /// Case-insensitive matches of the find query on the visible screen.
+    pub fn find_matches(&self) -> usize {
+        let (Some(query), Some(session)) = (self.find.as_ref(), self.selected()) else {
+            return 0;
+        };
+        let q = query.text.to_lowercase();
+        if q.is_empty() {
+            return 0;
+        }
+        session
+            .engine()
+            .snapshot()
+            .lines
+            .iter()
+            .map(|l| l.text().to_lowercase().matches(&q).count())
+            .sum()
     }
 
     pub fn selected(&self) -> Option<&Session> {
@@ -240,11 +283,16 @@ impl App {
     }
 
     fn selected_index(&self) -> Option<usize> {
-        self.sessions.iter().position(|s| Some(s.id) == self.selected)
+        self.sessions
+            .iter()
+            .position(|s| Some(s.id) == self.selected)
     }
 
     pub fn current_appearance(&self) -> TerminalAppearance {
-        let a11y = Accessibility { increase_contrast: self.env.increase_contrast, reduce_transparency: false };
+        let a11y = Accessibility {
+            increase_contrast: self.env.increase_contrast,
+            reduce_transparency: false,
+        };
         terminal_appearance(&self.themes.resolved(self.env.dark), a11y)
     }
 
@@ -273,6 +321,14 @@ impl App {
         self.had_tabs = true;
     }
 
+    /// Adds a tab built by `make` from a fresh id and selects it (demo scenes).
+    pub fn add_demo(&mut self, make: impl FnOnce(u64) -> Session) -> u64 {
+        let id = self.next_id();
+        let session = make(id);
+        self.add(session);
+        id
+    }
+
     pub fn new_tab(&mut self) {
         let id = self.next_id();
         let session = Session::local(id, self.current_appearance(), self.waker.clone(), true);
@@ -289,8 +345,12 @@ impl App {
     /// The user sees every privileged command — Glasshouse never elevates silently.
     pub fn run_visible_script(&mut self, title: &str, script: &str) -> Result<(), String> {
         let path = std::env::temp_dir().join(format!("glasshouse-{}.sh", uuid::Uuid::new_v4()));
-        std::fs::write(&path, script)
-            .map_err(|e| format!("Couldn't write the script to {}: {e} — check the temp directory", path.display()))?;
+        std::fs::write(&path, script).map_err(|e| {
+            format!(
+                "Couldn't write the script to {}: {e} — check the temp directory",
+                path.display()
+            )
+        })?;
         self.new_tab();
         let q = format!("'{}'", path.display());
         if let Some(session) = self.sessions.last_mut() {
@@ -307,11 +367,16 @@ impl App {
 
     /// Closing the selected tab selects its right-hand neighbour (else the left), like Safari and Terminal.app.
     pub fn close(&mut self, id: u64) {
-        let Some(index) = self.sessions.iter().position(|s| s.id == id) else { return };
+        let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
+            return;
+        };
         let session = self.sessions.remove(index);
         session.close();
         if self.selected == Some(id) {
-            self.selected = neighbour_after_close(&self.sessions.iter().map(|s| s.id).collect::<Vec<_>>(), index);
+            self.selected = neighbour_after_close(
+                &self.sessions.iter().map(|s| s.id).collect::<Vec<_>>(),
+                index,
+            );
         }
         self.hovered_tab = None;
         self.update_secure_input();
@@ -326,7 +391,9 @@ impl App {
     }
 
     fn select_offset(&mut self, delta: isize) {
-        let (Some(i), n) = (self.selected_index(), self.sessions.len()) else { return };
+        let (Some(i), n) = (self.selected_index(), self.sessions.len()) else {
+            return;
+        };
         let next = (i as isize + delta).rem_euclid(n as isize) as usize;
         self.selected = Some(self.sessions[next].id);
     }
@@ -335,7 +402,9 @@ impl App {
 
     pub fn grid_size(&self) -> Option<GridSize> {
         let cell = self.cell?;
-        let a = self.selected().map_or_else(|| self.current_appearance(), |s| s.appearance.clone());
+        let a = self
+            .selected()
+            .map_or_else(|| self.current_appearance(), |s| s.appearance.clone());
         let (w, h) = self.pane_size;
         let cols = ((w - 2.0 * a.padding_horizontal) / cell.width).floor();
         let rows = ((h - 2.0 * a.padding_vertical) / cell.height).floor();
@@ -375,9 +444,16 @@ impl App {
     // MARK: Frame poll
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        if let Some(env) = self.seen_env.take() {
+            self.set_env(env);
+        }
         let mut changed = self.receive_hosts();
         let generation = self.themes.generation;
-        if self.sessions.iter().any(|s| s.appearance_generation != generation) {
+        if self
+            .sessions
+            .iter()
+            .any(|s| s.appearance_generation != generation)
+        {
             let appearance = self.current_appearance();
             for session in &mut self.sessions {
                 session.apply_appearance(appearance.clone(), generation);
@@ -422,20 +498,33 @@ impl App {
     }
 
     fn handle_note(&mut self, id: u64, note: SessionNote, tx: &mut Tx) {
-        let Some(session) = self.sessions.iter().find(|s| s.id == id) else { return };
+        let Some(session) = self.sessions.iter().find(|s| s.id == id) else {
+            return;
+        };
         match note {
             SessionNote::CommandFinished(record) => {
-                let long = record.duration().is_some_and(|d| d >= session.timeline.notify_after);
+                let long = record
+                    .duration()
+                    .is_some_and(|d| d >= session.timeline.notify_after);
                 if long && Some(id) != self.selected {
                     let (title, body) = notify::command_finished_text(&session.title, &record);
                     notify::post(&title, &body);
                 }
             }
-            SessionNote::ApprovalAppeared { context, visible: true } => tx.announce(
-                format!("sudo is waiting for Touch ID: {}, as {}", context.command, context.run_as),
+            SessionNote::ApprovalAppeared {
+                context,
+                visible: true,
+            } => tx.announce(
+                format!(
+                    "sudo is waiting for Touch ID: {}, as {}",
+                    context.command, context.run_as
+                ),
                 LiveRegion::Assertive,
             ),
-            SessionNote::ApprovalAppeared { context, visible: false } => {
+            SessionNote::ApprovalAppeared {
+                context,
+                visible: false,
+            } => {
                 let (title, body) = notify::approval_waiting_text(&session.title, &context);
                 notify::post(&title, &body);
             }
@@ -445,17 +534,19 @@ impl App {
     }
 
     fn update_blink(&mut self, clock: f64, tx: &mut Tx) -> bool {
-        let blinking = self
-            .selected()
-            .is_some_and(|s| s.appearance.cursor_blink && s.engine().snapshot_rows(0..0).cursor.blinking);
+        let blinking = self.selected().is_some_and(|s| {
+            s.appearance.cursor_blink && s.engine().snapshot_rows(0..0).cursor.blinking
+        });
         if !blinking {
             let changed = !self.blink_on;
             self.blink_on = true;
             return changed;
         }
         let phase = (clock / BLINK).floor();
-        let on = phase as u64 % 2 == 0;
-        tx.wake_after(Duration::from_secs_f64(((phase + 1.0) * BLINK - clock).max(0.01)));
+        let on = (phase as u64).is_multiple_of(2);
+        tx.wake_after(Duration::from_secs_f64(
+            ((phase + 1.0) * BLINK - clock).max(0.01),
+        ));
         let changed = on != self.blink_on;
         self.blink_on = on;
         changed
@@ -463,7 +554,9 @@ impl App {
 
     /// Secure Keyboard Entry is on while the visible tab's foreground program reads a secret.
     fn update_secure_input(&self) {
-        let focused = self.selected().is_some_and(|s| s.trust == design_system::TrustState::SecureInput);
+        let focused = self
+            .selected()
+            .is_some_and(|s| s.trust == design_system::TrustState::SecureInput);
         if let Ok(mut entry) = SecureKeyboardEntry::shared().lock() {
             entry.update(focused);
         }
@@ -481,20 +574,24 @@ impl App {
     pub fn reload_hosts(&mut self) {
         let (send, receive) = channel();
         let waker = self.waker.clone();
-        let spawned = std::thread::Builder::new().name("ssh-hosts".into()).spawn(move || {
-            // The receiver may be gone if a newer reload replaced it; nothing to do then.
-            let _ = send.send(hosts::load_all());
-            if let Some(waker) = waker {
-                waker();
-            }
-        });
+        let spawned = std::thread::Builder::new()
+            .name("ssh-hosts".into())
+            .spawn(move || {
+                // The receiver may be gone if a newer reload replaced it; nothing to do then.
+                let _ = send.send(hosts::load_all());
+                if let Some(waker) = waker {
+                    waker();
+                }
+            });
         if spawned.is_ok() {
             self.hosts_rx = Some(receive);
         }
     }
 
     fn receive_hosts(&mut self) -> bool {
-        let Some(hosts) = self.hosts_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return false };
+        let Some(hosts) = self.hosts_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return false;
+        };
         self.hosts = hosts;
         self.hosts_rx = None;
         true
@@ -511,7 +608,9 @@ impl App {
         if self.palette.is_some() || self.settings.is_some() {
             return false;
         }
-        let Some((key, mods)) = shortcuts::terminal_key(ev) else { return false };
+        let Some((key, mods)) = shortcuts::terminal_key(ev) else {
+            return false;
+        };
         match self.selected() {
             Some(session) if !session.exited => {
                 session.send_key(&key, mods);
@@ -550,7 +649,11 @@ impl App {
                 if let Some(s) = self.selected() {
                     let top = s.engine().top_visible_row();
                     let rows = s.engine().size().rows as usize;
-                    tx.copy(terminal_core::TerminalEngine::text(s.engine(), top, top + rows));
+                    tx.copy(terminal_core::TerminalEngine::text(
+                        s.engine(),
+                        top,
+                        top + rows,
+                    ));
                 }
             }
             Shortcut::Paste => tx.read_clipboard(|app: &mut App, content, _| {
@@ -577,7 +680,10 @@ impl App {
     // MARK: Palette
 
     pub fn open_palette(&mut self, tx: &mut Tx) {
-        self.palette = Some(PaletteState { edit: TextEdit::new(""), selection: 0 });
+        self.palette = Some(PaletteState {
+            edit: TextEdit::new(""),
+            selection: 0,
+        });
         self.reload_hosts();
         tx.focus("palette-field", false);
     }
@@ -600,10 +706,20 @@ impl App {
                 credential: c,
             })
             .collect();
+        let cwds: Vec<Option<String>> = self
+            .sessions
+            .iter()
+            .map(|s| s.cwd.as_deref().map(crate::ui::home_relative))
+            .collect();
         let tabs: Vec<PaletteTab<'_>> = self
             .sessions
             .iter()
-            .map(|s| PaletteTab { id: s.id, title: &s.title, cwd: s.cwd.as_deref() })
+            .zip(&cwds)
+            .map(|(s, cwd)| PaletteTab {
+                id: s.id,
+                title: &s.title,
+                cwd: cwd.as_deref(),
+            })
             .collect();
         let recent = self.recent_commands();
         let recent: Vec<&str> = recent.iter().map(String::as_str).collect();
@@ -613,10 +729,17 @@ impl App {
 
     /// Most recent first, across every tab.
     fn recent_commands(&self) -> Vec<String> {
-        let mut records: Vec<&CommandRecord> =
-            self.sessions.iter().flat_map(|s| s.timeline.commands()).filter(|r| r.command_line.is_some()).collect();
+        let mut records: Vec<&CommandRecord> = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.timeline.commands())
+            .filter(|r| r.command_line.is_some())
+            .collect();
         records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
-        records.into_iter().filter_map(|r| r.command_line.as_deref().map(str::trim).map(str::to_owned)).collect()
+        records
+            .into_iter()
+            .filter_map(|r| r.command_line.as_deref().map(str::trim).map(str::to_owned))
+            .collect()
     }
 
     pub fn move_palette_selection(&mut self, delta: isize) {
@@ -671,29 +794,44 @@ impl App {
     }
 
     pub fn create_secure_enclave_key(&mut self) {
-        let Some(name) = self.settings.as_ref().map(|s| s.ssh.new_key.text.clone()) else { return };
-        let script = glasshouse_ssh_scripts::create_secure_enclave_key(&name).map_err(|e| e.to_string());
+        let Some(name) = self.settings.as_ref().map(|s| s.ssh.new_key.text.clone()) else {
+            return;
+        };
+        let script =
+            glasshouse_ssh_scripts::create_secure_enclave_key(&name).map_err(|e| e.to_string());
         self.request_visible_script("SSH key setup", script);
     }
 
     pub fn install_keys(&mut self, alias: &str) {
-        let Some(settings) = &self.settings else { return };
+        let Some(settings) = &self.settings else {
+            return;
+        };
         let ssh = &settings.ssh;
         let script = (|| {
             let store = ssh.store.as_ref().ok_or("No home directory")?;
-            let host = ssh.managed.hosts().iter().find(|h| h.alias == alias).ok_or("Host not found")?;
-            let key = store.public_key(&host.key_name).map_err(|e| e.to_string())?;
+            let host = ssh
+                .managed
+                .hosts()
+                .iter()
+                .find(|h| h.alias == alias)
+                .ok_or("Host not found")?;
+            let key = store
+                .public_key(&host.key_name)
+                .map_err(|e| e.to_string())?;
             let security = match &host.security_key {
                 Some(sk) => Some(store.public_key(&sk.key_name).map_err(|e| e.to_string())?),
                 None => None,
             };
-            glasshouse_ssh_scripts::install_keys(host, &key, security.as_ref()).map_err(|e| e.to_string())
+            glasshouse_ssh_scripts::install_keys(host, &key, security.as_ref())
+                .map_err(|e| e.to_string())
         })();
         self.request_visible_script(&format!("Install keys on {alias}"), script);
     }
 
     pub fn install_include(&mut self) {
-        let Some(ssh) = self.settings.as_mut().map(|s| &mut s.ssh) else { return };
+        let Some(ssh) = self.settings.as_mut().map(|s| &mut s.ssh) else {
+            return;
+        };
         if let Some(store) = &ssh.store
             && let Err(e) = store.install_include()
         {
@@ -704,14 +842,21 @@ impl App {
     }
 
     pub fn save_host_draft(&mut self) {
-        let Some(ssh) = self.settings.as_mut().map(|s| &mut s.ssh) else { return };
+        let Some(ssh) = self.settings.as_mut().map(|s| &mut s.ssh) else {
+            return;
+        };
         let Some(draft) = &mut ssh.editor else { return };
         let Some(store) = &ssh.store else { return };
         let host = draft.host();
-        let result = store.load().map_err(|e| e.to_string()).and_then(|mut config| {
-            config.upsert(&host, draft.original.as_deref()).map_err(|e| e.to_string())?;
-            store.save(&config).map_err(|e| e.to_string())
-        });
+        let result = store
+            .load()
+            .map_err(|e| e.to_string())
+            .and_then(|mut config| {
+                config
+                    .upsert(&host, draft.original.as_deref())
+                    .map_err(|e| e.to_string())?;
+                store.save(&config).map_err(|e| e.to_string())
+            });
         match result {
             Ok(()) => {
                 ssh.editor = None;
@@ -723,12 +868,17 @@ impl App {
     }
 
     pub fn remove_host(&mut self, alias: &str) {
-        let Some(ssh) = self.settings.as_mut().map(|s| &mut s.ssh) else { return };
+        let Some(ssh) = self.settings.as_mut().map(|s| &mut s.ssh) else {
+            return;
+        };
         let Some(store) = &ssh.store else { return };
-        let result = store.load().map_err(|e| e.to_string()).and_then(|mut config| {
-            config.remove(alias);
-            store.save(&config).map_err(|e| e.to_string())
-        });
+        let result = store
+            .load()
+            .map_err(|e| e.to_string())
+            .and_then(|mut config| {
+                config.remove(alias);
+                store.save(&config).map_err(|e| e.to_string())
+            });
         ssh.reload();
         if let Err(e) = result {
             ssh.error = Some(e);
@@ -736,7 +886,10 @@ impl App {
         self.reload_hosts();
     }
 
-    pub fn update_appearance(&mut self, change: impl FnOnce(&mut terminal_theme::AppearanceConfig)) {
+    pub fn update_appearance(
+        &mut self,
+        change: impl FnOnce(&mut terminal_theme::AppearanceConfig),
+    ) {
         let result = self.themes.update_config(change);
         if let Some(settings) = &mut self.settings {
             settings.appearance_error = result.err();
@@ -773,7 +926,10 @@ mod tests {
 
     #[test]
     fn free_key_name_should_number_taken_names() {
-        assert_eq!(free_key_name(&["glasshouse", "glasshouse-2"]), "glasshouse-3");
+        assert_eq!(
+            free_key_name(&["glasshouse", "glasshouse-2"]),
+            "glasshouse-3"
+        );
     }
 
     #[test]

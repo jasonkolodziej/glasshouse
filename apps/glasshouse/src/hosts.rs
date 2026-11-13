@@ -53,7 +53,9 @@ pub fn parse_resolved(alias: &str, text: &str) -> SshHost {
     let mut provider = None;
     let mut identity_agent = None;
     for line in text.lines() {
-        let Some((key, value)) = line.split_once(' ') else { continue };
+        let Some((key, value)) = line.split_once(' ') else {
+            continue;
+        };
         match key {
             "hostname" => host.host_name = Some(value.to_owned()),
             "user" => host.user = Some(value.to_owned()),
@@ -90,7 +92,11 @@ pub fn load_all() -> Vec<SshHost> {
     let Ok(store) = ssh_config::SshConfigStore::standard() else {
         return Vec::new();
     };
-    store.host_aliases().iter().filter_map(|alias| resolve(alias)).collect()
+    store
+        .host_aliases()
+        .iter()
+        .filter_map(|alias| resolve(alias))
+        .collect()
 }
 
 #[cfg(test)]

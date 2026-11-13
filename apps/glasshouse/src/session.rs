@@ -5,10 +5,13 @@ use std::sync::mpsc::Receiver;
 
 use design_system::TrustState;
 use glasshouse_security::{ProcessInspector, ProcessSnapshot};
-use shell_integration::{CommandRecord, CommandTimeline, LaunchPlan, ShellEvent, ShellIntegrationInstaller};
+use shell_integration::{
+    CommandRecord, CommandTimeline, LaunchPlan, ShellEvent, ShellIntegrationInstaller,
+};
 use terminal_core::{
-    EngineEvent, GridSize, Key, Modifiers, PasswordPromptDetector, PasswordPromptState, PtyEnvironment,
-    PtyEnvironmentOptions, PtyTerminal, PtyTerminalOptions, TerminalAppearance, TerminalEngine, Waker,
+    EngineEvent, GridSize, Key, Modifiers, PasswordPromptDetector, PasswordPromptState,
+    PtyEnvironment, PtyEnvironmentOptions, PtyTerminal, PtyTerminalOptions, TerminalAppearance,
+    TerminalEngine, Waker,
 };
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -53,7 +56,10 @@ pub struct ApprovalContext {
 pub enum SessionNote {
     CommandFinished(CommandRecord),
     /// A sudo prompt appeared; `visible` says whether its tab is on screen (announce) or not (notify).
-    ApprovalAppeared { context: ApprovalContext, visible: bool },
+    ApprovalAppeared {
+        context: ApprovalContext,
+        visible: bool,
+    },
     Exited(Option<i32>),
     Bell,
     Clipboard(String),
@@ -81,20 +87,40 @@ pub struct Session {
 
 impl Session {
     /// A login shell with shell integration (OSC 133) unless `shell_integration` is false.
-    pub fn local(id: u64, appearance: TerminalAppearance, waker: Option<Waker>, shell_integration: bool) -> Self {
-        let env = PtyEnvironment::make(&PtyEnvironmentOptions::new(APP_VERSION), &PtyEnvironment::current());
+    pub fn local(
+        id: u64,
+        appearance: TerminalAppearance,
+        waker: Option<Waker>,
+        shell_integration: bool,
+    ) -> Self {
+        let env = PtyEnvironment::make(
+            &PtyEnvironmentOptions::new(APP_VERSION),
+            &PtyEnvironment::current(),
+        );
         let shell = ShellIntegrationInstaller::user_shell();
         let plan = match ShellIntegrationInstaller::with_default_root() {
             Ok(installer) => installer.plan(&shell, &env, shell_integration),
-            Err(_) => LaunchPlan { executable: shell.clone(), args: Vec::new(), exec_name: shell, environment: env },
+            Err(_) => LaunchPlan {
+                executable: shell.clone(),
+                args: Vec::new(),
+                exec_name: shell,
+                environment: env,
+            },
         };
         Self::with_plan(id, "Shell", &plan, appearance, waker)
     }
 
     /// `ssh <alias>` via the *system* OpenSSH, which honours SSH_SK_PROVIDER.
     pub fn ssh(id: u64, alias: &str, appearance: TerminalAppearance, waker: Option<Waker>) -> Self {
-        let env = PtyEnvironment::make(&PtyEnvironmentOptions::new(APP_VERSION), &PtyEnvironment::current());
-        let ssh = if Path::new("/usr/bin/ssh").exists() { "/usr/bin/ssh" } else { "ssh" };
+        let env = PtyEnvironment::make(
+            &PtyEnvironmentOptions::new(APP_VERSION),
+            &PtyEnvironment::current(),
+        );
+        let ssh = if Path::new("/usr/bin/ssh").exists() {
+            "/usr/bin/ssh"
+        } else {
+            "ssh"
+        };
         let plan = LaunchPlan {
             executable: ssh.into(),
             args: vec![alias.to_owned()],
@@ -111,7 +137,10 @@ impl Session {
         appearance: TerminalAppearance,
         waker: Option<Waker>,
     ) -> Self {
-        let options = PtyTerminalOptions { appearance: appearance.clone(), ..PtyTerminalOptions::default() };
+        let options = PtyTerminalOptions {
+            appearance: appearance.clone(),
+            ..PtyTerminalOptions::default()
+        };
         let (mut engine, events) = PtyTerminal::new(options);
         engine.set_waker(waker);
         let start_error = engine.start(plan).err().map(|e| e.to_string());
@@ -132,6 +161,50 @@ impl Session {
             appearance_generation: 0,
             input_start_row: None,
         }
+    }
+
+    /// A tab with no shell, showing `transcript` as if a shell had printed it: snapshot scenes
+    /// and the `--demo` run. Its OSC 133 marks fill the timeline as a live tab's would.
+    pub fn demo(
+        id: u64,
+        title: &str,
+        appearance: TerminalAppearance,
+        size: GridSize,
+        transcript: &str,
+    ) -> Self {
+        let options = PtyTerminalOptions {
+            appearance: appearance.clone(),
+            ..PtyTerminalOptions::default()
+        };
+        let (engine, events) = PtyTerminal::new(options);
+        let _ = engine.resize(size);
+        // The PTY uses CRLF line endings; a transcript written with `\n` gets them here.
+        engine.feed(transcript.replace('\n', "\r\n").as_bytes());
+        let mut session = Session {
+            id,
+            engine,
+            events,
+            title: title.to_owned(),
+            cwd: None,
+            exited: false,
+            exit_code: None,
+            start_error: None,
+            timeline: CommandTimeline::new(),
+            trust: TrustState::Idle,
+            approval: None,
+            polling: false,
+            appearance,
+            appearance_generation: 0,
+            input_start_row: None,
+        };
+        session.drain(true);
+        session
+    }
+
+    /// Demo only: shows the approval card as a live `sudo` would.
+    pub fn show_approval(&mut self, context: ApprovalContext) {
+        self.trust = TrustState::TouchIdSudo;
+        self.approval = Some(context);
     }
 
     pub fn engine(&self) -> &PtyTerminal {
@@ -198,7 +271,9 @@ impl Session {
     /// Re-evaluates who owns the foreground and whether the tty is in secret-input mode.
     /// Called on output activity and every 100 ms while sudo/ssh is in the foreground.
     fn refresh_trust(&mut self, visible: bool, notes: &mut Vec<SessionNote>) {
-        let Some(fd) = self.engine.pty_master_fd() else { return };
+        let Some(fd) = self.engine.pty_master_fd() else {
+            return;
+        };
         let foreground = ProcessInspector::foreground(fd);
         let secret = PasswordPromptDetector::state(fd) == PasswordPromptState::SecretInput;
         match foreground {
@@ -206,14 +281,26 @@ impl Session {
                 self.polling = true;
                 let dest = fg.ssh_destination().unwrap_or("remote host").to_owned();
                 // Local secret mode while ssh is foreground = ssh's own passphrase/password prompt.
-                let trust = if secret { TrustState::SecureInput } else { TrustState::RemoteSession(dest) };
+                let trust = if secret {
+                    TrustState::SecureInput
+                } else {
+                    TrustState::RemoteSession(dest)
+                };
                 self.set_trust(trust, None, visible, notes);
             }
             Some(fg) if fg.is_sudo() => {
                 self.polling = true;
-                let phase = if secret { ApprovalPhase::PasswordFallback } else { ApprovalPhase::WaitingForTouchId };
+                let phase = if secret {
+                    ApprovalPhase::PasswordFallback
+                } else {
+                    ApprovalPhase::WaitingForTouchId
+                };
                 let ctx = self.approval_context(&fg, phase);
-                let trust = if secret { TrustState::SecureInput } else { TrustState::TouchIdSudo };
+                let trust = if secret {
+                    TrustState::SecureInput
+                } else {
+                    TrustState::TouchIdSudo
+                };
                 self.set_trust(trust, Some(ctx), visible, notes);
             }
             _ if secret => self.set_trust(TrustState::SecureInput, None, visible, notes),
@@ -230,7 +317,10 @@ impl Session {
         let kernel_args: &[String] = p.arguments.get(1..).unwrap_or_default();
         let (command, source) = if kernel_args.is_empty() {
             let reported = self.timeline.current().and_then(|r| r.command_line.clone());
-            (reported.unwrap_or_else(|| "sudo".into()), ApprovalSource::Shell)
+            (
+                reported.unwrap_or_else(|| "sudo".into()),
+                ApprovalSource::Shell,
+            )
         } else {
             let quoted: Vec<String> = kernel_args.iter().map(|a| quote_for_display(a)).collect();
             (quoted.join(" "), ApprovalSource::Kernel)
@@ -258,7 +348,10 @@ impl Session {
         self.trust = trust;
         self.approval = approval;
         if let Some(ctx) = self.approval.as_ref().filter(|_| appeared) {
-            notes.push(SessionNote::ApprovalAppeared { context: ctx.clone(), visible });
+            notes.push(SessionNote::ApprovalAppeared {
+                context: ctx.clone(),
+                visible,
+            });
         }
     }
 
@@ -302,13 +395,22 @@ impl Session {
     }
 
     pub fn output(&self, record: &CommandRecord) -> String {
-        let Some(start) = record.output_row else { return String::new() };
-        let end = record.end_row.unwrap_or_else(|| self.engine.cursor_absolute_row());
+        let Some(start) = record.output_row else {
+            return String::new();
+        };
+        let end = record
+            .end_row
+            .unwrap_or_else(|| self.engine.cursor_absolute_row());
         self.engine.text(start, end)
     }
 
     pub fn last_output(&self) -> Option<String> {
-        let last = self.timeline.commands().iter().rev().find(|r| r.finished_at.is_some())?;
+        let last = self
+            .timeline
+            .commands()
+            .iter()
+            .rev()
+            .find(|r| r.finished_at.is_some())?;
         Some(self.output(last))
     }
 
@@ -328,7 +430,10 @@ impl Session {
 /// Program-set titles (OSC 0/2) never reach trusted chrome; strip glyphs that imitate it anyway.
 pub fn sanitize_title(raw: &str) -> String {
     const BANNED: [char; 7] = ['🔒', '🔐', '🔑', '🛡', '✅', '☑', '✔'];
-    raw.chars().filter(|c| !BANNED.contains(c) && !matches!(c, '\n' | '\r')).take(80).collect()
+    raw.chars()
+        .filter(|c| !BANNED.contains(c) && !matches!(c, '\n' | '\r'))
+        .take(80)
+        .collect()
 }
 
 /// The user `sudo -u NAME` / `sudo --user=NAME` runs as.
@@ -340,7 +445,11 @@ pub fn sudo_target_user(args: &[String]) -> Option<&str> {
 }
 
 fn quote_for_display(s: &str) -> String {
-    if s.contains(' ') { format!("'{s}'") } else { s.to_owned() }
+    if s.contains(' ') {
+        format!("'{s}'")
+    } else {
+        s.to_owned()
+    }
 }
 
 fn host_name() -> String {
@@ -379,7 +488,10 @@ mod tests {
 
     #[test]
     fn sudo_target_user_should_read_dash_u() {
-        assert_eq!(sudo_target_user(&args(&["-u", "postgres", "psql"])), Some("postgres"));
+        assert_eq!(
+            sudo_target_user(&args(&["-u", "postgres", "psql"])),
+            Some("postgres")
+        );
     }
 
     #[test]
