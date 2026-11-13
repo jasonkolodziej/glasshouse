@@ -97,6 +97,9 @@ pub fn terminal_appearance(
     appearance.cursor_shape = shape(resolved.cursor_shape);
     appearance.cursor_blink = resolved.cursor_blink;
     appearance.bold_is_bright = resolved.bold_is_bright;
+    appearance.bold = colors
+        .bold
+        .map(|c| apca::enforce(policy.foreground_minimum, opaque(c), floor_bg));
     appearance.background_opacity = opacity;
     appearance.padding_horizontal = resolved.padding_horizontal as f32;
     appearance.padding_vertical = resolved.padding_vertical as f32;

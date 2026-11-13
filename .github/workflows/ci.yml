@@ -71,8 +71,9 @@ jobs:
         uses: actions/checkout@v4
 
       # winit links libxkbcommon on Linux. The tests draw on the CPU, so no GPU or Vulkan is needed.
-      - name: Install system libraries
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev
+      # zsh and fish let the shell-integration tests run every supported shell, not just bash.
+      - name: Install system libraries and shells
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev zsh fish
 
       # rust-toolchain.toml pins the version and its clippy and rustfmt components.
       - name: Install the pinned toolchain

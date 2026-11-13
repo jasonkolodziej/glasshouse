@@ -414,7 +414,14 @@ impl Palette<'_> {
             Color::Indexed(i) if brighten && i < 8 => Color::Indexed(i + 8),
             other => other,
         };
-        let mut fg = self.color(fg_color);
+        // A theme's bold colour replaces the default foreground for bold text, as in iTerm2.
+        let default_bold = match self.appearance.bold {
+            Some(bold_color) if bold && cell.fg == Color::Named(NamedColor::Foreground) => {
+                Some(bold_color)
+            }
+            _ => None,
+        };
+        let mut fg = default_bold.unwrap_or_else(|| self.color(fg_color));
         if f.contains(Flags::DIM) {
             fg = dim(fg);
         }

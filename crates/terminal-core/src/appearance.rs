@@ -39,6 +39,9 @@ pub struct TerminalAppearance {
     pub cursor_blink: bool,
     /// Bold text in the bright ANSI colours.
     pub bold_is_bright: bool,
+    /// Bold text in the default foreground colour (iTerm2's "Bold Color"); `None` draws it in the
+    /// foreground, brightened as `bold_is_bright` says.
+    pub bold: Option<Rgba>,
     /// Opacity of the default background, 0…1.
     pub background_opacity: f32,
     /// 16 ANSI colors, normal then bright.
@@ -63,6 +66,7 @@ impl TerminalAppearance {
             cursor_shape: TerminalCursorShape::Block,
             cursor_blink: false,
             bold_is_bright: true,
+            bold: None,
             background_opacity: 1.0,
             ansi,
             padding_horizontal: 10.0,
