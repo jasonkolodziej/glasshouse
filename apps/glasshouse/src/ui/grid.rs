@@ -72,7 +72,10 @@ pub fn pane(app: &App, ink: &Ink) -> El {
     let area = el()
         .key("grid-area")
         .grow(1.0)
+        .min_w(0.0)
         .h_full()
+        // A grid wider than the pane (before a resize lands) must not draw over the gutter.
+        .clip_rounded(0.0)
         .on_layout(|s: &mut App, r: [f32; 4]| s.set_pane_size(r[2], r[3]))
         .child(screen(app, session, cell, ink));
 
@@ -95,7 +98,7 @@ pub fn pane(app: &App, ink: &Ink) -> El {
         )
         .child(status_line(app, session, ink));
     if ink.glass {
-        pane = pane.backdrop_blur(18.0);
+        pane = pane.fill(ink.surface(ink.bg));
     }
     if let Some(error) = &session.start_error {
         pane = pane.child(banner(&format!("the shell couldn't start: {error}"), ink));

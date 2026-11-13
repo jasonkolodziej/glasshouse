@@ -206,6 +206,8 @@ pub struct App {
     pub secure_always: bool,
     /// The window's size in points, from layout (the wallpaper places its light by it).
     pub window: (f32, f32),
+    /// Presentation scenes: the window floats on a wallpaper, with drawn window buttons.
+    pub showcase: bool,
     /// Where an edit lands if its field's overlay closed between the event and the handler.
     pub scratch: TextEdit,
     pub scratch_draft: Option<HostDraft>,
@@ -247,6 +249,7 @@ impl App {
             blink_on: true,
             secure_always: false,
             window: (0.0, 0.0),
+            showcase: false,
             scratch: TextEdit::new(""),
             scratch_draft: None,
             seen_env: std::cell::Cell::new(None),

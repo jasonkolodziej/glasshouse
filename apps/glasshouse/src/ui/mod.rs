@@ -38,6 +38,8 @@ pub const RAIL_WIDTH: f32 = 40.0;
 pub const SIDEBAR_WIDTH: f32 = 260.0;
 /// Below this window opacity the chrome turns to frosted glass over the wallpaper.
 const GLASS_BELOW: f32 = 0.999;
+/// The frame's blur, in points (CSS `backdrop-filter: blur()`).
+const GLASS_BLUR: f32 = 40.0;
 
 /// An sRGB design-system colour as Rune's linear colour.
 pub fn color(c: Rgba) -> Color {
@@ -232,34 +234,90 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .child(hrule(&ink))
         .child(hint_bar(app, &ink));
 
-    let mut root = el()
-        .key("root")
+    // The window's contents: frost, frame and overlays. Overlays place themselves by this
+    // layer's size, so it reports it.
+    let mut window = el()
+        .key("window")
         .w_full()
         .h_full()
-        .fill(ink.surface(ink.bg))
         .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]));
-    if ink.glass {
-        root = el()
-            .key("root")
-            .w_full()
-            .h_full()
-            .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]))
-            .child(wallpaper(app.window, ink.dark));
+    window = if ink.glass {
+        // One blur for the whole frame: every translucent surface above sits on frosted glass,
+        // and the other blur slots stay free for the palette, card and Settings.
+        window.child(
+            el().key("frost")
+                .absolute(0.0, 0.0)
+                .w_full()
+                .h_full()
+                .backdrop_blur(GLASS_BLUR),
+        )
+    } else {
+        window.fill(ink.bg)
+    };
+    window = window.child(frame).child(grid::cell_probe(app));
+    if app.showcase {
+        window = window.child(traffic_lights());
     }
-    root = root.child(frame).child(grid::cell_probe(app));
     if app.palette.is_some() {
-        root = root.child(overlays::dim("palette-dim", &ink, |s: &mut App, tx| {
+        window = window.child(overlays::dim("palette-dim", &ink, |s: &mut App, tx| {
             s.close_palette(tx)
         }));
-        root = root.child(overlays::palette(app, &ink));
+        window = window.child(overlays::palette(app, &ink));
     }
     if app.settings.is_some() {
-        root = root.child(overlays::dim("settings-dim", &ink, |s: &mut App, _| {
+        window = window.child(overlays::dim("settings-dim", &ink, |s: &mut App, _| {
             s.settings = None
         }));
-        root = root.child(settings::sheet(app, &ink));
+        window = window.child(settings::sheet(app, &ink));
     }
-    root
+
+    let mut root = el().key("root").w_full().h_full();
+    if ink.glass || app.showcase {
+        root = root.child(wallpaper(app.window, ink.dark));
+    }
+    if app.showcase {
+        // Presentation: the window floats on the wallpaper, so the glass has a desktop to show.
+        let m = SHOWCASE_MARGIN;
+        root.child(
+            el().key("showcase")
+                .pin(Some(m), Some(m * 0.8), Some(m), Some(m * 1.2))
+                .radius(12.0)
+                .clip_rounded(12.0)
+                .shadow(
+                    30.0,
+                    80.0,
+                    Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.02,
+                        a: 0.6,
+                    },
+                )
+                .border(1.0, Color::WHITE.alpha(if ink.dark { 0.14 } else { 0.5 }))
+                .child(window),
+        )
+    } else {
+        root.child(window)
+    }
+}
+
+const SHOWCASE_MARGIN: f32 = 56.0;
+
+/// The three window buttons, drawn for the presentation scene (a live window gets the system's).
+fn traffic_lights() -> El {
+    let dot = |c: Color| {
+        el().size(12.0, 12.0)
+            .radius(6.0)
+            .fill(c)
+            .border(0.5, Color::BLACK.alpha(0.2))
+    };
+    row()
+        .key("traffic-lights")
+        .absolute(14.0, 11.0)
+        .gap(8.0)
+        .child(dot(rune::color::hex("#ff5f57").unwrap_or(Color::WHITE)))
+        .child(dot(rune::color::hex("#febc2e").unwrap_or(Color::WHITE)))
+        .child(dot(rune::color::hex("#28c840").unwrap_or(Color::WHITE)))
 }
 
 /// Soft coloured light, seen through the glass when the window is translucent.

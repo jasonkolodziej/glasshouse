@@ -1,4 +1,8 @@
+<p align="center"><img src="../../docs/icon.png" alt="Glasshouse" width="96" /></p>
+
 # Glasshouse (Rust + Rune)
+
+![Glasshouse](../../docs/screenshots/hero.png)
 
 The Swift app in `Glasshouse/`, ported to Rust with the [Rune](https://github.com/anomalyco/rune)
 UI framework. The window is drawn the way a TUI draws itself, after the character-grid IDE at
@@ -12,8 +16,10 @@ UI framework. The window is drawn the way a TUI draws itself, after the characte
 - a numbered tab bar with key hints along the bottom, and an icon rail down the right
 - palette, approval card and Settings as boxes titled in their top rule, with `[x]`, `(•)` and `[ buttons ]`
 
-Below 100% window opacity (Settings → Appearance), the chrome turns to frosted glass over a
-wallpaper: `El::backdrop_blur`, as in Rune's `frosted-bar` example. See the `glass` scene.
+Below 100% window opacity (Settings → Appearance) the frame is frosted glass: one full-window
+`El::backdrop_blur` (as in Rune's `frosted-bar` example) under translucent theme colours, leaving
+the other blur slots for the palette, approval card and Settings. The scenes use 74%; `solid`
+shows 100%.
 
 | Terminal | Sidebar |
 | --- | --- |
@@ -24,8 +30,8 @@ wallpaper: `El::backdrop_blur`, as in Rune's `frosted-bar` example. See the `gla
 | ![Find](../../docs/screenshots/find.png) | ![Light](../../docs/screenshots/light.png) |
 | **Settings: Security** | **Settings: SSH** |
 | ![Security](../../docs/screenshots/settings.png) | ![SSH](../../docs/screenshots/ssh.png) |
-| **Settings: Appearance** | **Glass (opacity 72%)** |
-| ![Appearance](../../docs/screenshots/appearance.png) | ![Glass](../../docs/screenshots/glass.png) |
+| **Settings: Appearance** | **Opaque (100% opacity)** |
+| ![Appearance](../../docs/screenshots/appearance.png) | ![Opaque](../../docs/screenshots/solid.png) |
 
 ## Run
 
@@ -40,7 +46,7 @@ Linux needs `libxkbcommon-dev` to link.
 
 Every screenshot is a headless render of a scene. A scene fills the window with demo tabs: real
 terminal engines fed recorded output, so no shell is spawned. The scenes are `terminal`,
-`sidebar`, `palette`, `approval`, `find`, `settings`, `ssh`, `appearance`, `light` and `glass`.
+`sidebar`, `palette`, `approval`, `find`, `settings`, `ssh`, `appearance`, `light`, `solid` and `hero` (the window floating on the wallpaper, for this README).
 
 ```sh
 cargo run -p glasshouse -- --snap docs/screenshots/palette.png --scene palette --scale 2 --theme dark

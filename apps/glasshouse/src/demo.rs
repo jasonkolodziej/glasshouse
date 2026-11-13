@@ -25,7 +25,8 @@ pub const SCENES: &[Scene] = &[
     ("ssh", settings_ssh),
     ("appearance", settings_appearance),
     ("light", light),
-    ("glass", glass),
+    ("solid", solid),
+    ("hero", hero),
 ];
 
 const GRID: GridSize = GridSize {
@@ -145,7 +146,7 @@ fn add(app: &mut App, title: &str, transcript: &str) -> u64 {
 /// Built-in themes, no disk, three tabs: what every scene starts from.
 pub fn terminal(app: &mut App) {
     app.themes = ThemeLibrary::built_in();
-    app.themes.config.window.opacity = None;
+    app.themes.config.window.opacity = Some(GLASS_OPACITY);
     app.themes.generation += 1;
     let first = add(app, "glasshouse — cargo", &main_transcript());
     let server = add(app, "myserver", &server_transcript());
@@ -306,14 +307,23 @@ fn light(app: &mut App) {
     sidebar(app);
 }
 
-/// The translucent variant: below 100% opacity the wallpaper and blur show through.
-fn glass(app: &mut App) {
+/// Window opacity in the scenes: below 1, so the frame is frosted glass over the wallpaper.
+const GLASS_OPACITY: f64 = 0.74;
+
+/// The opaque variant: the theme's background, no wallpaper or blur.
+fn solid(app: &mut App) {
     sidebar(app);
-    app.themes.config.window.opacity = Some(0.72);
+    app.themes.config.window.opacity = Some(1.0);
     app.themes.generation += 1;
     let appearance = app.current_appearance();
     let generation = app.themes.generation;
     for session in &mut app.sessions {
         session.apply_appearance(appearance.clone(), generation);
     }
+}
+
+/// The README's picture: the glass window floating on the wallpaper, sidebar open.
+fn hero(app: &mut App) {
+    sidebar(app);
+    app.showcase = true;
 }

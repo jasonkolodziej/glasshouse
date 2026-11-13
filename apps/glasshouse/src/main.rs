@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Scenes (`--scene NAME`): `terminal`, `sidebar`, `palette`, `approval`, `find`, `settings`,
-//! `ssh`, `appearance`, `light` and `glass`. Each fills the window with demo tabs, so no shell is spawned.
+//! `ssh`, `appearance`, `light` and `solid`. Each fills the window with demo tabs, so no shell is spawned.
 
 mod app;
 mod appearance;

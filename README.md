@@ -1,4 +1,49 @@
-# git-repo-template
+<p align="center">
+  <img src="docs/icon.png" alt="Glasshouse" width="128" />
+</p>
+
+<h1 align="center">Glasshouse</h1>
+
+<p align="center">
+  A terminal drawn on its own character grid, in frosted glass, whose trust signals come from the kernel.<br/>
+  Rust, rendered with <a href="https://github.com/anomalyco/rune">Rune</a>. Ported from the Swift app in <code>Glasshouse/</code>.
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/hero.png" alt="Glasshouse: a translucent terminal window with a sessions sidebar, a pane header, a vim-style status line and a key-hint bar, over a blurred wallpaper" />
+</p>
+
+## The view
+
+The whole window is drawn the way a TUI draws itself: one monospace font, the terminal theme's
+colours for the chrome, 1 px rules and square corners. Below 100% window opacity the frame is
+frosted glass: the wallpaper blurs through every surface.
+
+| | |
+| --- | --- |
+| **Tabs and title row**: `• name` per tab, an accent bar over the active one, a spinner while a command runs | **Trust block**: `TOUCH ID: SUDO`, `SECURE INPUT` or `REMOTE: host`, from the kernel's process table, never from program output |
+| **Pane header**: the last command and how long it took | **Status line**: `SHELL` / `SSH` / `SUDO` / `SECRET`, the directory, the last exit code, the grid size |
+| **Sidebar**: open sessions and the hosts in `~/.ssh/config`, with how each one signs in | **Gutter**: a mark per command, by status (● ran, ■ failed, ○ running) |
+| **Hint bar**: numbered tabs (⌘1–9) and the keys worth knowing | **Rail**: palette, new tab, sidebar, find, copy last output, clear, settings |
+
+| Command palette | Touch ID approval card |
+| --- | --- |
+| ![Command palette](docs/screenshots/palette.png) | ![Approval card](docs/screenshots/approval.png) |
+| **Settings: SSH keys and hosts** | **Settings: Appearance** |
+| ![SSH settings](docs/screenshots/ssh.png) | ![Appearance settings](docs/screenshots/appearance.png) |
+| **Light Mode** | **Opaque (100% opacity)** |
+| ![Light Mode](docs/screenshots/light.png) | ![Opaque](docs/screenshots/solid.png) |
+
+```sh
+cargo run -p glasshouse                 # a live shell
+cargo run -p glasshouse -- --demo       # scripted tabs, no shell
+```
+
+More in [`apps/glasshouse/README.md`](apps/glasshouse/README.md): scenes, screenshots and the code layout.
+
+---
+
+## Repository template
 
 GitHub repo template setup for all git-repos
 
