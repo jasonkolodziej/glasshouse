@@ -1,0 +1,30 @@
+# Glasshouse terminal theme. See the README's Themes section for every key.
+schema: 1
+name: High Contrast Dark
+author: Glasshouse
+appearance: dark
+colors:
+  background: "#000000"
+  foreground: "#ffffff"
+  cursor: "#ffd60a"
+  cursor-text: "#000000"
+  selection: "#1f4fbf"
+  normal:
+    black: "#000000"
+    red: "#ff6b6b"
+    green: "#5cf28c"
+    yellow: "#ffe14d"
+    blue: "#7aa8ff"
+    magenta: "#f08cff"
+    cyan: "#5ce6f2"
+    white: "#e6e6e6"
+  bright:
+    black: "#8c8c8c"
+    red: "#ff9e9e"
+    green: "#9effb8"
+    yellow: "#fff09e"
+    blue: "#b3cdff"
+    magenta: "#f7b8ff"
+    cyan: "#9ef4fa"
+    white: "#ffffff"
+contrast: high
