@@ -1,0 +1,32 @@
+# >>> arc-slurm >>>
+# Managed by the Arc HPC VS Code extension (Arc: Configure SSH).
+Include ~/.ssh/arc-slurm.conf
+# <<< arc-slurm <<<
+
+Host *
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile ~/.ssh/id_someID
+  IdentityFile ~/.ssh/id_someID_signing
+
+Host myserver
+    HostName <ip-address>
+    User you
+    IdentityFile ~/.ssh/glasshouse
+    SecurityKeyProvider /usr/lib/ssh-keychain.dylib
+    IdentitiesOnly yes
+    ForwardAgent no
+
+Host myserver
+    HostName <ip-address>
+    User you
+    Port 22
+    IdentityFile ~/.ssh/id_someID
+
+Host myserver.local
+    HostName <ip-address>
+    User you
+    Port 22
+    IdentityFile ~/.ssh/id_someID
+
+

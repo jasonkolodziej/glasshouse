@@ -1,0 +1,23 @@
+[package]
+name = "glasshouse"
+description = "Glasshouse terminal: a Rust port of the Swift app, with a Rune UI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+design-system.workspace = true
+glasshouse-security.workspace = true
+libc.workspace = true
+rune.workspace = true
+shell-integration.workspace = true
+ssh-config.workspace = true
+terminal-core.workspace = true
+terminal-theme.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,53 @@
+# Glasshouse in Rust: a port of the Swift/Xcode project in Glasshouse/ (kept as the reference).
+# Library crates mirror the Swift modules one to one; apps/ holds the Rune UI and the SSH agent.
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+design-system = { path = "crates/design-system" }
+shell-integration = { path = "crates/shell-integration" }
+terminal-core = { path = "crates/terminal-core" }
+glasshouse-security = { path = "crates/glasshouse-security" }
+ssh-agent-core = { path = "crates/ssh-agent-core" }
+ssh-config = { path = "crates/ssh-config" }
+terminal-theme = { path = "crates/terminal-theme" }
+
+rune = { git = "https://github.com/anomalyco/rune", rev = "428e23be6fcefa4e19faad28d9fc2f4313e7851c" }
+alacritty_terminal = "0.26"
+anyhow = "1"
+base64 = "0.22"
+libc = "0.2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+plist = "1"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+
+# Rune's own patches (see Rune's README, "Depending on Rune"): a dependency's [patch] does not
+# reach this workspace, so these must track the same rev as the rune dependency above.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "428e23be6fcefa4e19faad28d9fc2f4313e7851c" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "428e23be6fcefa4e19faad28d9fc2f4313e7851c" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "428e23be6fcefa4e19faad28d9fc2f4313e7851c" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "428e23be6fcefa4e19faad28d9fc2f4313e7851c" }
