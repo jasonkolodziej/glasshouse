@@ -306,9 +306,12 @@ fn handle(
                 peer: conn.peer.clone(),
                 bind: conn.binds.last().cloned(),
             };
-            if !request.key.policy.allowed_hosts.is_empty()
-                && !request.destination_matches(&request.key.policy.allowed_hosts)
-            {
+            // A host restriction needs an authenticated host: the session-bind host key, its
+            // signature verified and matched to a known_hosts name allowed by the policy. The
+            // peer's argv can't stand in for that (`ssh -o HostName=elsewhere allowed`, or any
+            // client calling itself ssh), and that verification doesn't exist yet, so a
+            // restricted key fails closed: it signs nothing rather than sign for the wrong host.
+            if !request.key.policy.allowed_hosts.is_empty() {
                 return Ok(AgentResponse::failure());
             }
             if let Some(approver) = &shared.approver

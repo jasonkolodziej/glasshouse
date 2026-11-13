@@ -56,8 +56,9 @@ pub fn shortcut_for(ev: &KeyEvent, mac: bool) -> Option<Shortcut> {
             (Key::Command(','), false) => Some(Shortcut::Settings),
             (Key::Command('c'), false) => Some(Shortcut::Copy),
             (Key::Command('v'), false) => Some(Shortcut::Paste),
-            (Key::Command(']'), true) => Some(Shortcut::NextTab),
-            (Key::Command('['), true) => Some(Shortcut::PreviousTab),
+            // Rune reports the character Shift types, so ⇧⌘] arrives as `}` on a US layout.
+            (Key::Command(']' | '}'), true) => Some(Shortcut::NextTab),
+            (Key::Command('[' | '{'), true) => Some(Shortcut::PreviousTab),
             (Key::Command(c @ '1'..='9'), false) => Some(Shortcut::SelectTab(digit(*c))),
             (Key::Up, false) => Some(Shortcut::PreviousPrompt),
             (Key::Down, false) => Some(Shortcut::NextPrompt),
@@ -246,6 +247,18 @@ mod tests {
         let (_, mods) =
             terminal_key(&ev(Key::Text("c".into()), false, false, true)).expect("a terminal key");
         assert!(mods.control);
+    }
+
+    #[test]
+    fn mac_shift_cmd_bracket_should_switch_tabs_as_the_shifted_character_arrives() {
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('}'), true, true, false), true),
+            Some(Shortcut::NextTab)
+        );
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('{'), true, true, false), true),
+            Some(Shortcut::PreviousTab)
+        );
     }
 
     #[test]

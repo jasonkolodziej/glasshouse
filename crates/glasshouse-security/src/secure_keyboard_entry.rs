@@ -132,6 +132,17 @@ impl<B: SecureInputBackend> SecureKeyboardEntry<B> {
     }
 }
 
+/// The system counts enables per process, so a dropped instance that still holds one would leave
+/// Secure Event Input on (blocking other apps' event taps) until the app quits.
+impl<B: SecureInputBackend> Drop for SecureKeyboardEntry<B> {
+    fn drop(&mut self) {
+        if self.is_enabled {
+            self.backend.disable();
+            self.is_enabled = false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +194,33 @@ mod tests {
         entry.set_always_on(false);
         assert!(entry.is_enabled());
         assert_eq!(entry.backend().enables, 1);
+    }
+
+    /// Counts disables in a cell the test keeps, so they can be read after the entry drops.
+    struct Shared(std::rc::Rc<std::cell::Cell<u32>>);
+
+    impl SecureInputBackend for Shared {
+        fn enable(&mut self) {}
+        fn disable(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn dropping_an_enabled_instance_should_release_its_reference() {
+        let disables = std::rc::Rc::new(std::cell::Cell::new(0));
+        {
+            let mut entry = SecureKeyboardEntry::with_backend(Shared(disables.clone()));
+            entry.update(true);
+        }
+        assert_eq!(disables.get(), 1);
+    }
+
+    #[test]
+    fn dropping_a_disabled_instance_should_not_release_anything() {
+        let disables = std::rc::Rc::new(std::cell::Cell::new(0));
+        drop(SecureKeyboardEntry::with_backend(Shared(disables.clone())));
+        assert_eq!(disables.get(), 0);
     }
 
     #[cfg(not(target_os = "macos"))]

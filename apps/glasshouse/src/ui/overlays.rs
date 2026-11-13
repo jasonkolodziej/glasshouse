@@ -252,7 +252,7 @@ pub fn approval_card(c: &ApprovalContext, ink: &Ink) -> El {
                 .color(if kernel { ink.secondary } else { ink.orange }),
         );
     let fallback = (!waiting).then(|| {
-        text("Touch ID was cancelled or unavailable. Secure input is on for this tab.")
+        text("Touch ID was cancelled or unavailable. sudo is asking for your password in this tab.")
             .w_full()
             .wrap()
             .font(style(11.5, 450.0))

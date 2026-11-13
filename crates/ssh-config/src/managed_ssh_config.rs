@@ -49,7 +49,8 @@ impl ManagedSshConfig {
     }
 
     /// Adds `host`. With `replacing`, replaces the entry with that alias instead (an edit, which may rename it).
-    /// Every alias a host writes (`myserver`, and `myserver-key` with a security key) must be unique.
+    /// Every alias a host writes (`myserver`, and `myserver-key` with a security key) must be unique,
+    /// ignoring ASCII case as OpenSSH does.
     pub fn upsert(
         &mut self,
         host: &ManagedSshHost,
@@ -63,10 +64,12 @@ impl ManagedSshConfig {
             if Some(i) == index {
                 continue;
             }
+            // OpenSSH matches Host patterns case-insensitively: `prod` and `PROD` are one host,
+            // and the first block's settings would win for both.
             if let Some(clash) = other
                 .aliases()
                 .into_iter()
-                .find(|alias| names.contains(alias))
+                .find(|alias| names.iter().any(|name| name.eq_ignore_ascii_case(alias)))
             {
                 return Err(SshConfigError::DuplicateAlias(clash));
             }
@@ -146,6 +149,18 @@ mod tests {
         );
         assert!(text.ends_with(&tail));
         assert_eq!(ssh_config_text::host_aliases(&text), ["myserver", "gh"]);
+    }
+
+    #[test]
+    fn upsert_should_refuse_an_alias_that_differs_only_in_case() {
+        let mut config = ManagedSshConfig::new();
+        config.upsert(&myserver(), None).unwrap();
+        let mut shouting = myserver();
+        shouting.alias = "MYSERVER".into();
+        assert_eq!(
+            config.upsert(&shouting, None),
+            Err(SshConfigError::DuplicateAlias("myserver".into()))
+        );
     }
 
     #[test]

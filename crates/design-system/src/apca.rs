@@ -65,7 +65,7 @@ pub fn contrast(text: Rgba, background: Rgba) -> f64 {
     }
 }
 
-/// Nudges `text` toward white (on a dark background) or black (on a light one) until |Lc| ≥ `minimum`.
+/// Nudges `text` toward white or black, whichever contrasts more with `background`, until |Lc| ≥ `minimum`.
 ///
 /// Hue is preserved as long as possible by mixing rather than replacing — the same order Zed uses
 /// (lightness first, black/white as last resort). The text's alpha is kept.
@@ -73,8 +73,11 @@ pub fn enforce(minimum: f64, text: Rgba, background: Rgba) -> Rgba {
     if contrast(text, background).abs() >= minimum {
         return text;
     }
-    let dark_background = luminance(background) < 0.18;
-    let target = if dark_background {
+    // Head for whichever endpoint contrasts more with this background. A fixed luminance cutoff
+    // picks black on mid greys like #888888 although only white reaches Lc 60 there.
+    let white = contrast(Rgba::WHITE.with_alpha(text.a), background).abs();
+    let black = contrast(Rgba::BLACK.with_alpha(text.a), background).abs();
+    let target = if white >= black {
         Rgba::WHITE
     } else {
         Rgba::BLACK
@@ -165,5 +168,11 @@ mod tests {
         let fixed = enforce(90.0, gray(200), gray(250));
         assert!(contrast(fixed, gray(250)) >= 90.0 || fixed == Rgba::BLACK);
         assert!(fixed.r < 200.0 / 255.0);
+    }
+
+    #[test]
+    fn enforce_should_head_for_white_on_mid_grey_where_only_white_reaches_the_floor() {
+        let fixed = enforce(60.0, gray(0x88), gray(0x88));
+        assert!(contrast(fixed, gray(0x88)).abs() >= 60.0, "{fixed:?}");
     }
 }

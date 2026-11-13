@@ -222,6 +222,29 @@ fn allowed_hosts_require_a_matching_ssh_destination() {
 }
 
 #[test]
+fn allowed_hosts_fail_closed_even_with_a_session_bind() {
+    // A session bind names a host key, but host keys aren't yet matched to known_hosts names,
+    // and argv can name a host the connection doesn't go to: nothing proves the destination.
+    let h = harness(
+        KeyPolicy {
+            allowed_hosts: vec!["*".to_owned()],
+            allow_forwarded: true,
+            ..KeyPolicy::default()
+        },
+        None,
+    );
+    let mut stream = UnixStream::connect(&h.socket).unwrap();
+    assert_eq!(
+        round_trip(&mut stream, &session_bind(false)),
+        [AgentMessage::SUCCESS]
+    );
+    assert_eq!(
+        round_trip(&mut stream, &sign_request(&h.key_blob, b"x")),
+        [AgentMessage::FAILURE]
+    );
+}
+
+#[test]
 fn approver_is_consulted_for_every_signature() {
     let calls = Arc::new(AtomicUsize::new(0));
     let allow = Arc::new(Mutex::new(false));

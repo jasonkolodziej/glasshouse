@@ -29,11 +29,26 @@ _glasshouse_preexec() {
 _glasshouse_prompt_begin() {
   _glasshouse_status=$?   # must run first in PROMPT_COMMAND to see the real exit status
   _glasshouse_in_prompt=1
+  return "$_glasshouse_status"  # so the user's own PROMPT_COMMAND hooks still see it in $?
+}
+# Percent-encodes $1 for a file:// URL path into _glasshouse_url: every byte outside the
+# unreserved set and '/' (so '#', '%', '?', spaces and control bytes survive the round trip).
+_glasshouse_url_path() {
+  local LC_ALL=C s="$1" c i
+  _glasshouse_url=""
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9/._~-]) _glasshouse_url+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; _glasshouse_url+="$c" ;;
+    esac
+  done
 }
 _glasshouse_prompt_end() {
   if [ -n "$_glasshouse_running" ]; then printf '\e]133;D;%s\a' "$_glasshouse_status"; fi
   _glasshouse_running=""
-  printf '\e]7;file://%s%s\a' "$HOSTNAME" "${PWD// /%20}"
+  _glasshouse_url_path "$PWD"
+  printf '\e]7;file://%s%s\a' "$HOSTNAME" "$_glasshouse_url"
   printf '\e]133;A\a'
   _glasshouse_ready=1
   _glasshouse_in_prompt=""

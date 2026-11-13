@@ -21,7 +21,7 @@ frosted glass: the wallpaper blurs through every surface.
 
 | | |
 | --- | --- |
-| **Tabs and title row**: `• name` per tab, an accent bar over the active one, a spinner while a command runs | **Trust block**: `TOUCH ID: SUDO`, `SECURE INPUT` or `REMOTE: host`, from the kernel's process table, never from program output |
+| **Tabs and title row**: `• name` per tab, an accent bar over the active one, a spinner while a command runs | **Trust block**: `TOUCH ID: SUDO`, `PASSWORD PROMPT` or `REMOTE: host`, from the kernel's process table, never from program output |
 | **Pane header**: the last command and how long it took | **Status line**: `SHELL` / `SSH` / `SUDO` / `SECRET`, the directory, the last exit code, the grid size |
 | **Sidebar**: open sessions and the hosts in `~/.ssh/config`, with how each one signs in | **Gutter**: a mark per command, by status (● ran, ■ failed, ○ running) |
 | **Hint bar**: numbered tabs (⌘1–9) and the keys worth knowing | **Rail**: palette, new tab, sidebar, find, copy last output, clear, settings |

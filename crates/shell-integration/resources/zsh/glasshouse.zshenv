@@ -24,12 +24,29 @@ if [[ -o interactive && -z "${_GLASSHOUSE_HOOKED-}" ]]; then
       builtin printf '\e]133;D;%s\a' "$ret"        # command finished, with exit status
     fi
     _glasshouse_running=""
-    builtin printf '\e]7;file://%s%s\a' "${HOST}" "${PWD// /%20}"  # cwd
+    _glasshouse_url_path "$PWD"
+    builtin printf '\e]7;file://%s%s\a' "${HOST}" "$_glasshouse_url"  # cwd
     builtin printf '\e]133;A\a'                    # prompt start
     # Mark end-of-prompt / start-of-input. Re-append if a theme rebuilt PS1.
     if [[ "$PS1" != *$'\e]133;B\a'* ]]; then
       PS1="${PS1}%{"$'\e]133;B\a'"%}"
     fi
+  }
+
+  # Percent-encodes $1 for a file:// URL path into _glasshouse_url: every byte outside the
+  # unreserved set and '/' (so '#', '%', '?', spaces and control bytes survive the round trip).
+  _glasshouse_url_path() {
+    emulate -L zsh
+    local LC_ALL=C s="$1" c
+    local -i i
+    typeset -g _glasshouse_url=""
+    for (( i = 1; i <= ${#s}; i++ )); do
+      c="${s[i]}"
+      case "$c" in
+        [A-Za-z0-9/._~-]) _glasshouse_url+="$c" ;;
+        *) builtin printf -v c '%%%02X' "'$c"; _glasshouse_url+="$c" ;;
+      esac
+    done
   }
 
   _glasshouse_preexec() {

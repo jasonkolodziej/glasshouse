@@ -52,6 +52,7 @@ pub fn parse_resolved(alias: &str, text: &str) -> SshHost {
     };
     let mut provider = None;
     let mut identity_agent = None;
+    let mut algorithms = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -62,10 +63,19 @@ pub fn parse_resolved(alias: &str, text: &str) -> SshHost {
             "port" => host.port = Some(value.to_owned()),
             "securitykeyprovider" => provider = Some(value),
             "identityagent" => identity_agent = Some(value),
+            "pubkeyacceptedalgorithms" => algorithms = Some(value),
             _ => {}
         }
     }
-    if provider == Some(ssh_config::glasshouse_ssh::SECURITY_KEY_PROVIDER) {
+    // The provider alone only says which library handles security keys: an IdentityFile or an
+    // agent key could still sign without Touch ID. A Glasshouse host also turns the agent off and
+    // accepts only sk- algorithms, so every signature is a security-key one through the provider.
+    let only_security_keys = algorithms
+        .is_some_and(|list| !list.is_empty() && list.split(',').all(|a| a.starts_with("sk-")));
+    if provider == Some(ssh_config::glasshouse_ssh::SECURITY_KEY_PROVIDER)
+        && identity_agent == Some("none")
+        && only_security_keys
+    {
         host.credential = Credential::SecureEnclave;
     } else if identity_agent.is_some_and(|a| a.contains(".glasshouse/agent.sock")) {
         host.credential = Credential::Agent;
@@ -105,7 +115,8 @@ mod tests {
 
     #[test]
     fn parse_resolved_should_mark_secure_enclave_hosts() {
-        let text = "hostname h.example\nuser me\nport 22\nsecuritykeyprovider /usr/lib/ssh-keychain.dylib\n";
+        let text = "hostname h.example\nuser me\nport 22\nsecuritykeyprovider /usr/lib/ssh-keychain.dylib\n\
+                    identityagent none\npubkeyacceptedalgorithms sk-ecdsa-sha2-nistp256@openssh.com\n";
         let host = parse_resolved("box", text);
         assert_eq!(
             host,
@@ -117,6 +128,21 @@ mod tests {
                 credential: Credential::SecureEnclave,
             }
         );
+    }
+
+    #[test]
+    fn parse_resolved_should_not_promise_touch_id_when_other_keys_can_sign() {
+        // The provider is set, but ssh-agent and ordinary key types are still allowed.
+        let text = "securitykeyprovider /usr/lib/ssh-keychain.dylib\nidentityagent SSH_AUTH_SOCK\n\
+                    pubkeyacceptedalgorithms ssh-ed25519,sk-ecdsa-sha2-nistp256@openssh.com\n";
+        assert_eq!(parse_resolved("box", text).credential, Credential::Other);
+    }
+
+    #[test]
+    fn parse_resolved_should_not_promise_touch_id_with_only_a_provider() {
+        let text =
+            "securitykeyprovider /usr/lib/ssh-keychain.dylib\nidentityfile ~/.ssh/id_ed25519\n";
+        assert_eq!(parse_resolved("box", text).credential, Credential::Other);
     }
 
     #[test]

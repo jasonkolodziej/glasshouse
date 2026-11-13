@@ -18,6 +18,9 @@ pub struct ApprovalRequest {
 
 impl ApprovalRequest {
     /// Destination from the requesting `ssh` process's argv (e.g. "deploy@prod-db-1").
+    ///
+    /// For display only: the client chooses its argv, and `-o HostName=` can point the
+    /// connection elsewhere. Never enforce a policy with it.
     pub fn destination(&self) -> Option<&str> {
         self.peer.as_ref()?.process.as_ref()?.ssh_destination()
     }
@@ -57,6 +60,9 @@ impl ApprovalRequest {
     }
 
     /// Matches `user@host` or `host` against shell-style globs (e.g. "*.internal", "prod-*").
+    ///
+    /// Display only, like [`destination`](Self::destination): the agent enforces
+    /// `allowed_hosts` without it (see `AgentServer`).
     pub fn destination_matches(&self, patterns: &[String]) -> bool {
         let Some(dest) = self.destination() else {
             return false;

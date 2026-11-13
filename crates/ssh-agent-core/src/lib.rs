@@ -10,7 +10,7 @@ mod key_store;
 mod peer_identity;
 mod ssh_wire;
 
-pub use agent_configuration::AgentConfiguration;
+pub use agent_configuration::{AgentConfigError, AgentConfiguration};
 pub use agent_protocol::{AgentMessage, AgentRequest, AgentResponse, SSHKeyFormat, SessionBind};
 pub use agent_server::{AgentServer, AgentServerError, Approver};
 pub use approval_request::ApprovalRequest;

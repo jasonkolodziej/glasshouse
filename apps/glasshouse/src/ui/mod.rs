@@ -432,13 +432,25 @@ fn title_row(app: &App, ink: &Ink, inset: f32) -> El {
         .children(trust.is_visible().then(|| trust_block(&trust, ink)))
 }
 
+/// The trust block's spoken text. Secure Keyboard Entry is named only while the system reports
+/// it on (macOS); a hidden-input prompt alone doesn't keep keystrokes from other apps.
+fn trust_description(trust: &TrustState) -> String {
+    let mut description = trust.accessibility_description();
+    if *trust == TrustState::SecureInput
+        && glasshouse_security::SecureKeyboardEntry::is_active_system_wide()
+    {
+        description.push_str(" Secure Keyboard Entry is on.");
+    }
+    description
+}
+
 /// L4: an inverted block in the trust colour, from kernel state only.
 fn trust_block(trust: &TrustState, ink: &Ink) -> El {
     let fill = ink.tint(trust.tint());
     row()
         .key("trust")
         .role("status")
-        .label(trust.accessibility_description())
+        .label(trust_description(trust))
         .h(22.0)
         .px(10.0)
         .center_y()

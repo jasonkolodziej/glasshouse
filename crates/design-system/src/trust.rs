@@ -43,7 +43,8 @@ impl TrustState {
     pub fn label(&self) -> String {
         match self {
             Self::Idle => String::new(),
-            Self::SecureInput => "Secure input".to_owned(),
+            // termios says input isn't echoed: a password prompt, not protection from other apps.
+            Self::SecureInput => "Password prompt".to_owned(),
             Self::TouchIdSudo => "Touch ID: sudo".to_owned(),
             Self::RemoteSession(host) => format!("Remote: {host}"),
         }
@@ -54,7 +55,7 @@ impl TrustState {
         match self {
             Self::Idle => "No secure prompt".to_owned(),
             Self::SecureInput => {
-                "Secure input on. Keystrokes are hidden from other apps.".to_owned()
+                "A password prompt in this tab is reading hidden input.".to_owned()
             }
             Self::TouchIdSudo => "sudo is waiting for Touch ID in this tab".to_owned(),
             Self::RemoteSession(host) => {

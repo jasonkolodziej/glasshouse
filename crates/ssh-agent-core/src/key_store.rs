@@ -39,7 +39,9 @@ pub struct KeyPolicy {
     pub require_biometry_current_set: bool,
     /// Refuse requests that arrive through agent forwarding (session-bind is_forwarding = true).
     pub allow_forwarded: bool,
-    /// Host glob patterns this key may be used for; empty = any host.
+    /// Host glob patterns this key may be used for; empty = any host. Until the agent can bind a
+    /// request to an authenticated host (a verified session-bind host key in known_hosts), a key
+    /// with any pattern here signs nothing: the requester's argv names hosts it doesn't connect to.
     pub allowed_hosts: Vec<String>,
 }
 

@@ -44,6 +44,21 @@ fn shape(shape: CursorShape) -> TerminalCursorShape {
     }
 }
 
+/// The background the contrast floor is held against. Opaque, it is the theme's. Translucent, the
+/// window shows whatever is behind it (wallpaper, desktop), so the floor is held against the worst
+/// case: the background at `opacity` over white when the text is lighter, over black when darker.
+pub fn contrast_background(bg: Rgba, fg: Rgba, opacity: f32) -> Rgba {
+    if opacity >= 1.0 {
+        return bg;
+    }
+    let behind = if apca::luminance(fg) > apca::luminance(bg) {
+        Rgba::WHITE
+    } else {
+        Rgba::BLACK
+    };
+    bg.mix(behind, 1.0 - opacity.clamp(0.0, 1.0))
+}
+
 /// The engine appearance for `resolved`, with the contrast floor and accessibility overrides applied.
 pub fn terminal_appearance(
     resolved: &ResolvedAppearance,
@@ -54,22 +69,24 @@ pub fn terminal_appearance(
     let opaque = |c: ThemeColor| rgba(c).with_alpha(1.0);
     let bg = opaque(colors.background);
 
-    let ansi: [Rgba; 16] = std::array::from_fn(|i| {
-        let c = opaque(colors.ansi()[i]);
-        if EXEMPT_SLOTS.contains(&i) {
-            c
-        } else {
-            apca::enforce(policy.palette_minimum, c, bg)
-        }
-    });
-    let foreground = apca::enforce(policy.foreground_minimum, opaque(colors.foreground), bg);
-
     // Translucency is opt-in and forced off by the accessibility settings.
     let opacity = if a11y.reduce_transparency || a11y.increase_contrast {
         1.0
     } else {
         resolved.opacity as f32
     };
+    let fg = opaque(colors.foreground);
+    let floor_bg = contrast_background(bg, fg, opacity);
+
+    let ansi: [Rgba; 16] = std::array::from_fn(|i| {
+        let c = opaque(colors.ansi()[i]);
+        if EXEMPT_SLOTS.contains(&i) {
+            c
+        } else {
+            apca::enforce(policy.palette_minimum, c, floor_bg)
+        }
+    });
+    let foreground = apca::enforce(policy.foreground_minimum, fg, floor_bg);
 
     let mut appearance =
         TerminalAppearance::new(foreground, bg, colors.cursor.map_or(ACCENT, rgba), ansi);
@@ -229,6 +246,33 @@ mod tests {
             reduce_transparency: true,
         };
         assert_eq!(terminal_appearance(&r, a11y).background_opacity, 1.0);
+    }
+
+    #[test]
+    fn translucent_text_should_meet_the_floor_over_the_brightest_backdrop() {
+        let mut r = resolved("glasshouse-dark");
+        r.opacity = 0.7;
+        let a = terminal_appearance(&r, Accessibility::default());
+        let worst = contrast_background(a.background, a.foreground, 0.7);
+        let floor = ContrastPolicy::STANDARD;
+        assert!(apca::contrast(a.foreground, worst).abs() >= floor.foreground_minimum - 0.5);
+        for (i, c) in a
+            .ansi
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !EXEMPT_SLOTS.contains(i))
+        {
+            assert!(
+                apca::contrast(*c, worst).abs() >= floor.palette_minimum - 0.5,
+                "slot {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn contrast_background_should_be_the_theme_background_when_opaque() {
+        let bg = Rgba::rgb(0.1, 0.1, 0.12);
+        assert_eq!(contrast_background(bg, Rgba::WHITE, 1.0), bg);
     }
 
     #[test]
