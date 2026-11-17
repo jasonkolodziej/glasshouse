@@ -25,6 +25,10 @@ use crate::app::App;
 
 pub const SIZE: (f32, f32) = (1180.0, 740.0);
 
+/// The app icon (`AppIconC`, "Glasshouse"), 1024 px. A bundled release also carries it as
+/// `AppIcon.icns`; setting it at runtime covers `cargo run` and the bare binary.
+const ICON: &[u8] = include_bytes!("../../../docs/icon.png");
+
 fn setup(app: &mut App, waker: Waker) {
     // Snapshots, scripts and traces draw scenes; they never spawn a shell.
     if rune::is_headless() {
@@ -49,6 +53,9 @@ fn on_key(app: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
 fn main() {
     rune::set_app_id("glasshouse");
+    if let Err(error) = rune::set_app_icon(ICON) {
+        eprintln!("Glasshouse: {error}");
+    }
     rune::App::new(AppSpec {
         min_size: Some((640.0, 420.0)),
         scenes: demo::SCENES,

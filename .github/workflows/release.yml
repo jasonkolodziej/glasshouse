@@ -1,0 +1,116 @@
+name: Release
+
+# Push a tag like v0.1.0 to build Glasshouse (the Rust app) for macOS and Linux and publish a
+# GitHub release with the archives. "Run workflow" builds the same archives without releasing,
+# as downloadable workflow artifacts.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS (universal .app)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the version; the script adds both Apple targets.
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo registry, git dependencies and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build and bundle Glasshouse.app
+        run: scripts/package-macos.sh
+
+      - name: Upload archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: glasshouse-macos
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # winit links libxkbcommon; ImageMagick resizes the icon for the hicolor theme.
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev imagemagick
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo registry, git dependencies and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build and package
+        run: scripts/package-linux.sh
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: glasshouse-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Glasshouse $GITHUB_REF_NAME" \
+            --generate-notes \
+            $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)

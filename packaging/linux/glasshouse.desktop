@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Glasshouse
+GenericName=Terminal
+Comment=A terminal in frosted glass whose trust signals come from the kernel
+Exec=glasshouse
+Icon=glasshouse
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;ssh;
+StartupWMClass=glasshouse

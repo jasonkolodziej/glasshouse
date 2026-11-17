@@ -44,6 +44,26 @@ cargo run -p glasshouse -- --demo       # scripted tabs, no shell
 
 More in [`apps/glasshouse/README.md`](apps/glasshouse/README.md): scenes, screenshots and the code layout.
 
+### Releases
+
+Pushing a `v*` tag runs [`release.yml`](.github/workflows/release.yml), which publishes a GitHub
+release with:
+
+- `Glasshouse-<version>-macos-universal.dmg` / `.zip`: `Glasshouse.app` for Apple silicon and Intel,
+  with the app icon and the Glasshouse Agent inside (ad-hoc signed, so the first launch needs
+  right-click → Open)
+- `glasshouse-<version>-linux-<arch>.tar.gz` for x86_64 and aarch64: the binaries, a `.desktop`
+  entry and the icon at every hicolor size, laid out as a `/usr/local` prefix
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+scripts/package-macos.sh     # or build the same archives locally, into dist/
+scripts/package-linux.sh
+```
+
+The icon is [`docs/icon.png`](docs/icon.png) (`AppIconC`), turned into `AppIcon.icns` for the bundle
+and also set at runtime, so `cargo run` shows it in the Dock.
+
 ---
 
 ## Repository template
