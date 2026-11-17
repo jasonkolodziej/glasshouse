@@ -8,8 +8,10 @@
 //!   L3 overlays  — palette, approval card, find, Settings: boxed, titled in their top rule
 //!   L4 trusted   — the trust block and the card's header: kernel state only, never program text
 //!
-//! Below 100% window opacity the theme background turns translucent and a wallpaper with a
-//! backdrop blur shows through: the same frosted technique as Rune's `frosted-bar` example.
+//! Below 100% window opacity the theme background turns translucent. In a window on screen the
+//! frame sits on the system's Liquid Glass (`SystemMaterial::Glass`, `NSGlassEffectView` on
+//! macOS 26), so the desktop blurs through, as in Rune's `glass-card` example. Headless renders
+//! have no desktop: they blur a painted wallpaper instead, like Rune's `frosted-bar` example.
 
 mod grid;
 
@@ -20,7 +22,7 @@ mod settings;
 use design_system::{Rgba, TrustState, TrustTint};
 use rune::color::srgb_decode;
 use rune::tok::Family;
-use rune::{Color, Cx, El, TextStyle, col, el, oklch, oklcha, row, text};
+use rune::{Color, Cx, El, SystemMaterial, TextStyle, col, el, oklch, oklcha, row, text};
 use shell_integration::CommandStatus;
 use terminal_core::TerminalAppearance;
 
@@ -241,18 +243,24 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .w_full()
         .h_full()
         .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]));
-    window = if ink.glass {
+    let backdrop = Backdrop::for_window(app.native_glass, cfg!(target_os = "macos"));
+    window = match backdrop {
+        _ if !ink.glass => window.fill(ink.bg),
+        // Liquid Glass behind the whole window: the desktop blurs through it, and the translucent
+        // surfaces above tint it with the theme.
+        Backdrop::SystemGlass => window.system_material(SystemMaterial::Glass),
+        // Nothing: the desktop shows through the translucent surfaces where the compositor
+        // allows a transparent window.
+        Backdrop::Desktop => window,
         // One blur for the whole frame: every translucent surface above sits on frosted glass,
         // and the other blur slots stay free for the palette, card and Settings.
-        window.child(
+        Backdrop::PaintedWallpaper => window.child(
             el().key("frost")
                 .absolute(0.0, 0.0)
                 .w_full()
                 .h_full()
                 .backdrop_blur(GLASS_BLUR),
-        )
-    } else {
-        window.fill(ink.bg)
+        ),
     };
     window = window.child(frame).child(grid::cell_probe(app));
     if app.showcase {
@@ -272,7 +280,8 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     }
 
     let mut root = el().key("root").w_full().h_full();
-    if ink.glass || app.showcase {
+    // The painted wallpaper stands in for a desktop only where there is none to show.
+    if (ink.glass && backdrop == Backdrop::PaintedWallpaper) || app.showcase {
         root = root.child(wallpaper(app.window, ink.dark));
     }
     if app.showcase {
@@ -302,6 +311,29 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
 }
 
 const SHOWCASE_MARGIN: f32 = 56.0;
+
+/// What the frame's translucent surfaces sit on below 100% window opacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backdrop {
+    /// The system material over the real desktop. macOS only: elsewhere Rune has no native
+    /// material and paints a neutral tint at 94% opacity in its place, which would make the
+    /// window nearly opaque.
+    SystemGlass,
+    /// Nothing: the desktop shows through, unblurred, where the compositor allows it.
+    Desktop,
+    /// A painted wallpaper, blurred: headless renders have no desktop to show.
+    PaintedWallpaper,
+}
+
+impl Backdrop {
+    fn for_window(on_screen: bool, macos: bool) -> Backdrop {
+        match (on_screen, macos) {
+            (false, _) => Backdrop::PaintedWallpaper,
+            (true, true) => Backdrop::SystemGlass,
+            (true, false) => Backdrop::Desktop,
+        }
+    }
+}
 
 /// The three window buttons, drawn for the presentation scene (a live window gets the system's).
 fn traffic_lights() -> El {
@@ -730,5 +762,29 @@ pub fn home_relative(path: &str) -> String {
             format!("~{rest}")
         }
         _ => path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backdrop_should_use_the_system_material_only_on_macos() {
+        assert_eq!(Backdrop::for_window(true, true), Backdrop::SystemGlass);
+        // Rune's fallback for a material is a 94% tint: off macOS the layer stays clear instead.
+        assert_eq!(Backdrop::for_window(true, false), Backdrop::Desktop);
+    }
+
+    #[test]
+    fn backdrop_should_paint_a_wallpaper_where_there_is_no_desktop() {
+        assert_eq!(
+            Backdrop::for_window(false, true),
+            Backdrop::PaintedWallpaper
+        );
+        assert_eq!(
+            Backdrop::for_window(false, false),
+            Backdrop::PaintedWallpaper
+        );
     }
 }

@@ -828,7 +828,7 @@ fn appearance(app: &App, s: &SettingsState, ink: &Ink) -> El {
             segmented("opacity", &opacity_steps, opacity_now, ink, |a, v| {
                 a.update_appearance(|c| c.window.opacity = Some(f64::from(v) / 100.0))
             }),
-        ))).child(note("Below 100% the pane is frosted glass: what's behind it blurs through. Increase Contrast and Reduce Transparency make it opaque.", ink)))
+        ))).child(note("Below 100% the window turns to glass: the desktop shows through, blurred by Liquid Glass on macOS. Increase Contrast and Reduce Transparency make it opaque.", ink)))
         .child(section("Contrast", ink).child(group(ink).child(line(ink).child(label("Minimum contrast", ink).grow(1.0)).child(
             segmented(
                 "contrast",

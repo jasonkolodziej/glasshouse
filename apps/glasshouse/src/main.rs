@@ -19,7 +19,7 @@ mod session;
 mod shortcuts;
 mod ui;
 
-use rune::{AppSpec, KeyEvent, Tx, Waker};
+use rune::{AppSpec, KeyEvent, Tx, Waker, WindowOptions};
 
 use crate::app::App;
 
@@ -30,6 +30,8 @@ fn setup(app: &mut App, waker: Waker) {
     if rune::is_headless() {
         return;
     }
+    // A window on screen: glass is the system material over the real desktop.
+    app.native_glass = true;
     if rune::extra_args().iter().any(|a| a == "--demo") {
         demo::terminal(app);
         return;
@@ -47,7 +49,7 @@ fn on_key(app: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
 fn main() {
     rune::set_app_id("glasshouse");
-    rune::run(AppSpec {
+    rune::App::new(AppSpec {
         min_size: Some((640.0, 420.0)),
         scenes: demo::SCENES,
         families: ("Inter", ui::MONO_FAMILIES),
@@ -55,7 +57,15 @@ fn main() {
         poll: Some(poll),
         on_key: Some(on_key),
         ..AppSpec::new("Glasshouse", SIZE, App::default, ui::view)
-    });
+    })
+    // Transparent, so below 100% opacity the desktop shows through Liquid Glass. A window's
+    // transparency is fixed when it opens, so it is always on: at 100% the frame paints the
+    // theme's background over every pixel, which looks exactly like an opaque window.
+    .window_options(WindowOptions {
+        transparent: true,
+        ..WindowOptions::default()
+    })
+    .run();
 }
 
 #[cfg(test)]
@@ -65,12 +75,18 @@ mod tests {
     use super::*;
 
     fn scene(name: &str) -> Runtime<App> {
+        scene_with(name, |_| {})
+    }
+
+    /// A scene with `tweak` applied before its first frame.
+    fn scene_with(name: &str, tweak: impl FnOnce(&mut App)) -> Runtime<App> {
         let mut app = App::new(appearance::ThemeLibrary::built_in());
         let (_, apply) = demo::SCENES
             .iter()
             .find(|(n, _)| *n == name)
             .expect("scene exists");
         apply(&mut app);
+        tweak(&mut app);
         let mut rt = Runtime::new(app, ui::view, SIZE, Env::new(true, 1.0));
         rt.frame(0.0);
         rt.frame(1.0 / 60.0);
@@ -83,6 +99,45 @@ mod tests {
             let rt = scene(name);
             assert!(!rt.instances.is_empty(), "{name} drew nothing");
         }
+    }
+
+    #[test]
+    fn glass_on_screen_should_show_the_desktop_not_the_painted_wallpaper() {
+        // Headless (snapshots, README pictures): no desktop, so a painted wallpaper, blurred.
+        let headless = scene("terminal");
+        assert!(headless.find("wallpaper").is_some());
+        assert!(headless.find("frost").is_some());
+
+        // A window on screen: the system's Liquid Glass shows the real desktop instead.
+        let on_screen = scene_with("terminal", |app| app.native_glass = true);
+        assert!(on_screen.find("window").is_some());
+        assert!(on_screen.find("wallpaper").is_none());
+        assert!(on_screen.find("frost").is_none());
+
+        // At 100% opacity neither draws: the theme's background fills the window.
+        let opaque = scene_with("solid", |app| app.native_glass = true);
+        assert!(opaque.find("wallpaper").is_none());
+        assert!(opaque.find("frost").is_none());
+    }
+
+    #[test]
+    fn picking_a_theme_should_recolour_open_tabs() {
+        let mut rt = scene("terminal");
+        rt.poll = Some(poll);
+        let before = rt.state.selected().expect("a tab").appearance.background;
+        rt.state.update_appearance(|c| {
+            c.theme.dark = "high-contrast-dark".into();
+            c.theme.light = "high-contrast-dark".into();
+        });
+        rt.invalidate();
+        rt.frame(2.0 / 60.0);
+        let after = rt.state.selected().expect("a tab").appearance.background;
+        assert_ne!(before, after);
+        assert_eq!(
+            (after.r, after.g, after.b),
+            (0.0, 0.0, 0.0),
+            "High Contrast Dark is black"
+        );
     }
 
     #[test]
