@@ -133,7 +133,11 @@ mod tests {
         rt.frame(2.0 / 60.0);
         let after = rt.state.selected().expect("a tab").appearance.background;
         assert_ne!(before, after);
-        assert_eq!((after.r, after.g, after.b), (0.0, 0.0, 0.0), "High Contrast Dark is black");
+        assert_eq!(
+            (after.r, after.g, after.b),
+            (0.0, 0.0, 0.0),
+            "High Contrast Dark is black"
+        );
     }
 
     #[test]
