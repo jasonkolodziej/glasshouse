@@ -17,7 +17,10 @@
 
 The whole window is drawn the way a TUI draws itself: one monospace font, the terminal theme's
 colours for the chrome, 1 px rules and square corners. Below 100% window opacity the frame is
-frosted glass: the wallpaper blurs through every surface.
+glass: on macOS the window sits on the system's Liquid Glass (`NSGlassEffectView`, macOS 26), so
+the desktop behind it blurs through every surface, tinted by the theme. On other platforms the
+desktop shows through unblurred where the compositor allows a transparent window. The screenshots
+are rendered headless, with no desktop behind them, so they show a painted wallpaper instead.
 
 | | |
 | --- | --- |

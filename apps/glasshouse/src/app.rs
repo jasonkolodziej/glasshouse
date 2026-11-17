@@ -208,6 +208,10 @@ pub struct App {
     pub window: (f32, f32),
     /// Presentation scenes: the window floats on a wallpaper, with drawn window buttons.
     pub showcase: bool,
+    /// A real window (live or `--demo`), not a headless render: below 100% opacity the frame is
+    /// the system's Liquid Glass over the desktop. Headless renders have no desktop to show, so
+    /// they blur a painted wallpaper instead.
+    pub native_glass: bool,
     /// Where an edit lands if its field's overlay closed between the event and the handler.
     pub scratch: TextEdit,
     pub scratch_draft: Option<HostDraft>,
@@ -250,6 +254,7 @@ impl App {
             secure_always: false,
             window: (0.0, 0.0),
             showcase: false,
+            native_glass: false,
             scratch: TextEdit::new(""),
             scratch_draft: None,
             seen_env: std::cell::Cell::new(None),

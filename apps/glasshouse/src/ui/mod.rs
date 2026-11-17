@@ -8,8 +8,10 @@
 //!   L3 overlays  — palette, approval card, find, Settings: boxed, titled in their top rule
 //!   L4 trusted   — the trust block and the card's header: kernel state only, never program text
 //!
-//! Below 100% window opacity the theme background turns translucent and a wallpaper with a
-//! backdrop blur shows through: the same frosted technique as Rune's `frosted-bar` example.
+//! Below 100% window opacity the theme background turns translucent. In a window on screen the
+//! frame sits on the system's Liquid Glass (`SystemMaterial::Glass`, `NSGlassEffectView` on
+//! macOS 26), so the desktop blurs through, as in Rune's `glass-card` example. Headless renders
+//! have no desktop: they blur a painted wallpaper instead, like Rune's `frosted-bar` example.
 
 mod grid;
 
@@ -20,7 +22,7 @@ mod settings;
 use design_system::{Rgba, TrustState, TrustTint};
 use rune::color::srgb_decode;
 use rune::tok::Family;
-use rune::{Color, Cx, El, TextStyle, col, el, oklch, oklcha, row, text};
+use rune::{Color, Cx, El, SystemMaterial, TextStyle, col, el, oklch, oklcha, row, text};
 use shell_integration::CommandStatus;
 use terminal_core::TerminalAppearance;
 
@@ -241,7 +243,16 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .w_full()
         .h_full()
         .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]));
-    window = if ink.glass {
+    window = if !ink.glass {
+        window.fill(ink.bg)
+    } else if app.native_glass {
+        // Liquid Glass behind the whole window: the desktop blurs through it, and the translucent
+        // surfaces above tint it with the theme. The material replaces the fill in a transparent
+        // macOS window; elsewhere the clear fill draws instead, and the desktop shows unblurred.
+        window
+            .system_material(SystemMaterial::Glass)
+            .fill(Color::TRANSPARENT)
+    } else {
         // One blur for the whole frame: every translucent surface above sits on frosted glass,
         // and the other blur slots stay free for the palette, card and Settings.
         window.child(
@@ -251,8 +262,6 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
                 .h_full()
                 .backdrop_blur(GLASS_BLUR),
         )
-    } else {
-        window.fill(ink.bg)
     };
     window = window.child(frame).child(grid::cell_probe(app));
     if app.showcase {
@@ -272,7 +281,8 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     }
 
     let mut root = el().key("root").w_full().h_full();
-    if ink.glass || app.showcase {
+    // The painted wallpaper stands in for a desktop only where there is none to show.
+    if (ink.glass && !app.native_glass) || app.showcase {
         root = root.child(wallpaper(app.window, ink.dark));
     }
     if app.showcase {
