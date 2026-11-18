@@ -82,8 +82,8 @@ ssh-keygen -Y verify -f allowed_signers -I jasonkolodziej -n file \
 shasum -a 256 -c SHA256SUMS.txt --ignore-missing
 ```
 
-The key in `allowed_signers` is also listed on GitHub at
-<https://api.github.com/users/jasonkolodziej/ssh_signing_keys>. Releases before v0.1.4 aren't signed.
+The key in `allowed_signers` signs releases and nothing else, so its history in this repository
+shows any change to it. Releases before v0.1.4 aren't signed.
 
 The icon is [`docs/icon.png`](docs/icon.png) (`AppIconC`), turned into `AppIcon.icns` for the bundle
 and also set at runtime, so `cargo run` shows it in the Dock.

@@ -1,4 +1,4 @@
-# The SSH key that signs SHA256SUMS.txt on each Glasshouse release: jasonkolodziej's "Signing key Mac",
-# the same one GitHub lists at https://api.github.com/users/jasonkolodziej/ssh_signing_keys.
+# The SSH key that signs SHA256SUMS.txt on each Glasshouse release. It signs releases only (the
+# private half is the repository's RELEASE_SSH_SIGNING_KEY secret); to rotate it, replace this line.
 #   ssh-keygen -Y verify -f allowed_signers -I jasonkolodziej -n file -s SHA256SUMS.txt.sig < SHA256SUMS.txt
-jasonkolodziej namespaces="file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEeicByZ+NIlcPjEPXuAsaAHpUEB2yajx9NxplIkA7co
+jasonkolodziej namespaces="file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMgsWDcRf9ogaAWxxkB0kwuqd7Eyv6b0KB3R99Dh9YTw glasshouse release signing
