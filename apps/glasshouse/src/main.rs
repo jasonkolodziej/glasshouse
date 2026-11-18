@@ -148,6 +148,40 @@ mod tests {
     }
 
     #[test]
+    fn rail_icon_size_should_grow_the_rail_and_its_buttons() {
+        let rect = |rt: &Runtime<App>, key: &str| rt.presented(key).expect(key).0;
+        let default = scene("terminal");
+        let large = scene_with("terminal", |app| {
+            app.themes.config.rail_icon_size = Some(22.0);
+        });
+        assert_eq!(
+            rect(&default, "rail")[2],
+            40.0,
+            "the default rail is unchanged"
+        );
+        assert_eq!(rect(&default, "new-tab")[2..], [30.0, 28.0]);
+        assert_eq!(rect(&large, "rail")[2], 48.0);
+        assert_eq!(rect(&large, "new-tab")[2..], [38.0, 36.0]);
+        // The wider rail comes out of the terminal, not off the window.
+        let (default_grid, large_grid) = (
+            default.state.grid_size().expect("grid"),
+            large.state.grid_size().expect("grid"),
+        );
+        assert!(large_grid.cols < default_grid.cols);
+    }
+
+    #[test]
+    fn settings_should_offer_every_rail_icon_size() {
+        let rt = scene("appearance");
+        for name in ["Small", "Medium", "Large", "Huge"] {
+            assert!(
+                rt.find(&format!("rail-icon-size-{name}")).is_some(),
+                "{name} missing from Settings → Appearance"
+            );
+        }
+    }
+
+    #[test]
     fn layout_should_size_the_grid_to_the_pane() {
         let rt = scene("terminal");
         let size = rt.state.grid_size().expect("cell and pane measured");

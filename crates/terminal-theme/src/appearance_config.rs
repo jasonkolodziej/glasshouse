@@ -1,5 +1,7 @@
 //! `appearance.yaml`: which themes to use, and the settings every theme starts from.
 
+use std::ops::RangeInclusive;
+
 use crate::{
     ContrastLevel, CursorSettings, CursorShape, FontSettings, TerminalTheme, ThemeError,
     WindowSettings,
@@ -51,6 +53,7 @@ impl ThemeChoice {
 /// cursor: { style: block, blink: false }
 /// window: { padding-horizontal: 10, padding-vertical: 6, opacity: 1 }
 /// contrast: standard
+/// rail-icon-size: 14         # glyphs in the icon rail, in points
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppearanceConfig {
@@ -66,6 +69,9 @@ pub struct AppearanceConfig {
     pub window: WindowSettings,
     /// Global contrast level.
     pub contrast: ContrastLevel,
+    /// Size of the icon rail's glyphs, in points; `None` is [`Self::DEFAULT_RAIL_ICON_SIZE`]. App chrome, so
+    /// global only: a theme can't set it. YAML key `rail-icon-size`.
+    pub rail_icon_size: Option<f64>,
 }
 
 impl Default for AppearanceConfig {
@@ -77,11 +83,22 @@ impl Default for AppearanceConfig {
             cursor: CursorSettings::default(),
             window: WindowSettings::default(),
             contrast: ContrastLevel::Standard,
+            rail_icon_size: None,
         }
     }
 }
 
 impl AppearanceConfig {
+    /// Rail glyph size when `appearance.yaml` doesn't set one, in points.
+    pub const DEFAULT_RAIL_ICON_SIZE: f64 = 14.0;
+    /// Allowed rail glyph sizes, in points.
+    pub const RAIL_ICON_SIZE_RANGE: RangeInclusive<f64> = 10.0..=28.0;
+
+    /// The rail's glyph size in points: the configured one, or the default.
+    pub fn rail_icon_size(&self) -> f64 {
+        self.rail_icon_size.unwrap_or(Self::DEFAULT_RAIL_ICON_SIZE)
+    }
+
     /// Checks the schema and every value's range.
     ///
     /// # Errors
@@ -92,6 +109,11 @@ impl AppearanceConfig {
         }
         self.font.validate()?;
         self.window.validate()?;
+        if let Some(size) = self.rail_icon_size
+            && !Self::RAIL_ICON_SIZE_RANGE.contains(&size)
+        {
+            return Err(ThemeError::OutOfRange("rail icon size".into(), size));
+        }
         Ok(self.clone())
     }
 

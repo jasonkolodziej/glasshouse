@@ -247,6 +247,7 @@ pub(crate) fn decode_config(text: &str) -> Decoded<AppearanceConfig> {
         contrast: c
             .optional("contrast", named(ContrastLevel::from_name))?
             .unwrap_or_default(),
+        rail_icon_size: c.optional("rail-icon-size", double)?,
         schema: c
             .optional("schema", integer)?
             .unwrap_or(TerminalTheme::CURRENT_SCHEMA),
@@ -416,7 +417,7 @@ pub(crate) fn encode_theme(theme: &TerminalTheme) -> String {
 
 /// `appearance.yaml`'s body, keys in the order Swift's encoder writes them.
 pub(crate) fn encode_config(config: &AppearanceConfig) -> String {
-    render(&[
+    let mut entries = vec![
         Entry::Value("schema", config.schema.to_string()),
         Entry::Section(
             "theme",
@@ -430,5 +431,10 @@ pub(crate) fn encode_config(config: &AppearanceConfig) -> String {
         Entry::Section("cursor", cursor_entries(&config.cursor)),
         Entry::Section("window", window_entries(&config.window)),
         Entry::Value("contrast", config.contrast.as_str().into()),
-    ])
+    ];
+    // Glasshouse's own key, after the ones Swift writes; omitted at the default.
+    if let Some(size) = config.rail_icon_size {
+        entries.push(Entry::Value("rail-icon-size", plain_number(size)));
+    }
+    render(&entries)
 }
