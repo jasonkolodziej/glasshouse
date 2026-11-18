@@ -55,6 +55,10 @@ fn marks_frame_the_command(shell: &str) {
     let environment: HashMap<String, String> = [
         ("PATH", "/usr/local/bin:/usr/bin:/bin"),
         ("TERM", "xterm-256color"),
+        // Ubuntu's /etc/zsh/zshrc runs compinit, which stops at a y/n question before the first
+        // prompt when the machine has group- or world-writable completion directories (as GitHub's
+        // runners do). Its zshrc skips compinit when this is set; other shells ignore it.
+        ("skip_global_compinit", "1"),
         ("HOME", &home.path().to_string_lossy()),
         (
             "XDG_CONFIG_HOME",
