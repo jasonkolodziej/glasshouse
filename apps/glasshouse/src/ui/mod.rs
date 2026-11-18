@@ -3,7 +3,7 @@
 //! whatever has focus.
 //!
 //!   title row    — `• tab` entries (accent bar over the active one) and the trust block
-//!   body         — sidebar │ pane (header, grid, status line) │ icon rail
+//!   body         — sidebar │ pane (header, grid, status line) │ icon rail; split, a pane per tab
 //!   hint bar     — numbered tabs (⌘1…9) on the left, key hints on the right
 //!   L3 overlays  — palette, approval card, find, Settings: boxed, titled in their top rule
 //!   L4 trusted   — the trust block and the card's header: kernel state only, never program text
@@ -22,12 +22,13 @@ mod settings;
 use design_system::{Rgba, TrustState, TrustTint};
 use rune::color::srgb_decode;
 use rune::tok::Family;
-use rune::{Color, Cx, El, SystemMaterial, TextStyle, col, el, oklch, oklcha, row, text};
+use rune::{Color, Cx, Drag, El, SystemMaterial, TextStyle, col, el, oklch, oklcha, row, text};
 use shell_integration::CommandStatus;
 use terminal_core::TerminalAppearance;
 
-use crate::app::{App, SettingsPane, SystemEnv};
+use crate::app::{App, Layout, SettingsPane, SystemEnv, TabDrag};
 use crate::hosts::Credential;
+use crate::panes::DropTarget;
 use crate::shortcuts::{self, Shortcut};
 
 /// The mono slot: the theme's font is tried first (see `grid::family`), then these.
@@ -228,7 +229,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .min_h(0.0)
         .children(app.show_sidebar.then(|| sidebar(app, &ink)))
         .children(app.show_sidebar.then(|| vrule(&ink)))
-        .child(grid::pane(app, &ink))
+        .child(grid::panes(app, &ink))
         .child(vrule(&ink))
         .child(rail(app, &ink));
 
@@ -247,7 +248,10 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .key("window")
         .w_full()
         .h_full()
-        .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]));
+        .on_layout(|s: &mut App, r: [f32; 4]| {
+            s.window = (r[2], r[3]);
+            s.window_origin = (r[0], r[1]);
+        });
     let backdrop = Backdrop::for_window(app.native_glass, cfg!(target_os = "macos"));
     window = match backdrop {
         _ if !ink.glass => window.fill(ink.bg),
@@ -268,6 +272,11 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         ),
     };
     window = window.child(frame).child(grid::cell_probe(app));
+    if let Some(drag) = app.tab_drag {
+        window = window
+            .children(strip_marker(app, &ink))
+            .child(drag_ghost(app, drag, &ink));
+    }
     if app.showcase {
         window = window.child(traffic_lights());
     }
@@ -420,13 +429,20 @@ fn title_row(app: &App, ink: &Ink, inset: f32) -> El {
         } else {
             bullet
         };
+        let lifted = app.tab_drag.is_some_and(|d| d.id == id);
         col()
             .key(format!("tab-{id}"))
             .role("tab")
             .label(s.title.clone())
+            .help("Drag along the tabs to reorder, or onto a pane to split")
             .hit()
             .h_full()
+            .opacity(if lifted { 0.35 } else { 1.0 })
             .on_press(move |s: &mut App| s.select(id))
+            .on_drag(move |s: &mut App, d: &mut Drag, _| s.drag_tab(id, d))
+            .on_layout(move |s: &mut App, r: [f32; 4]| {
+                s.rects.tabs.insert(id, r);
+            })
             .on_hover_change(move |s: &mut App, inside, _| {
                 if inside {
                     s.hovered_tab = Some(id);
@@ -464,9 +480,62 @@ fn title_row(app: &App, ink: &Ink, inset: f32) -> El {
         .center_y()
         .fill(ink.surface(ink.panel))
         .window_drag()
+        .on_layout(|s: &mut App, r: [f32; 4]| s.rects.strip = r)
         .children(tabs)
         .child(el().grow(1.0))
         .children(trust.is_visible().then(|| trust_block(&trust, ink)))
+}
+
+/// The bar between tabs where a tab dragged along the strip would go.
+fn strip_marker(app: &App, ink: &Ink) -> Option<El> {
+    let Some(DropTarget::Strip(index)) = app.tab_drag.and_then(|d| d.target) else {
+        return None;
+    };
+    let rects: Vec<[f32; 4]> = app
+        .sessions
+        .iter()
+        .filter_map(|s| app.rects.tabs.get(&s.id).copied())
+        .collect();
+    let x = match rects.get(index) {
+        Some(r) => r[0],
+        None => rects.last().map(|r| r[0] + r[2])?,
+    };
+    let strip = app.rects.strip;
+    let (ox, oy) = app.window_origin;
+    Some(
+        el().key("strip-marker")
+            .absolute(x - 1.0 - ox, strip[1] + 4.0 - oy)
+            .size(2.0, (strip[3] - 8.0).max(0.0))
+            .fill(ink.accent),
+    )
+}
+
+/// The dragged tab's name, following the pointer.
+fn drag_ghost(app: &App, drag: TabDrag, ink: &Ink) -> El {
+    let title = app
+        .session(drag.id)
+        .map_or_else(String::new, |s| s.title.clone());
+    let (ox, oy) = app.window_origin;
+    panel(
+        row()
+            .key("drag-ghost")
+            .absolute(drag.point[0] + 12.0 - ox, drag.point[1] + 10.0 - oy)
+            .h(24.0)
+            .px(10.0)
+            .gap(8.0)
+            .center_y()
+            .shadow(8.0, 20.0, ink.shadow),
+        ink,
+        ink.panel,
+    )
+    .child(text("•").font(style(UI, 700.0)).color(ink.accent))
+    .child(
+        text(title)
+            .font(style(UI, 600.0))
+            .color(ink.text)
+            .truncate()
+            .max_w(220.0),
+    )
 }
 
 /// The trust block's spoken text. Secure Keyboard Entry is named only while the system reports
@@ -536,6 +605,7 @@ fn rail(app: &App, ink: &Ink) -> El {
             )
             .on_press(|s: &mut App| s.show_sidebar = !s.show_sidebar),
         )
+        .child(layout_button(app, size, ink))
         .child(
             item("find", "/", "Find", Shortcut::Find)
                 .on_press_tx(|s: &mut App, tx| s.run_shortcut(Shortcut::Find, tx)),
@@ -558,6 +628,28 @@ fn rail(app: &App, ink: &Ink) -> El {
             item("open-settings", "◎", "Settings", Shortcut::Settings)
                 .on_press(|s: &mut App| s.open_settings(SettingsPane::Security)),
         )
+}
+
+/// One button for the layout, showing what pressing it does next: split side by side, then
+/// stacked, then back to one tab.
+fn layout_button(app: &App, size: f32, ink: &Ink) -> El {
+    let next = app.layout().next();
+    let (glyph, label, shortcut) = match next {
+        Layout::SideBySide => (
+            "◫",
+            "Split Tabs Side by Side",
+            Some(Shortcut::SplitSideBySide),
+        ),
+        Layout::Stacked => ("⊟", "Split Tabs Stacked", Some(Shortcut::SplitStacked)),
+        Layout::Single | Layout::Custom => ("▢", "Unsplit Tabs", None),
+    };
+    let help = match shortcut {
+        Some(s) => format!("{label} ({})", shortcuts::label(s)),
+        None => label.to_owned(),
+    };
+    icon_button("layout", glyph, label, size, ink)
+        .help(help)
+        .on_press(move |s: &mut App| s.set_layout(next))
 }
 
 /// Numbered tabs (the ⌘1…9 targets) and the keys worth knowing.

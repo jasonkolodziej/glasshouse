@@ -84,6 +84,8 @@ pub struct Session {
     pub polling: bool,
     pub appearance: TerminalAppearance,
     pub appearance_generation: u64,
+    /// This tab's terminal area in points, from its pane's layout; (0, 0) until it is on screen.
+    pub pane_size: (f32, f32),
     input_start_row: Option<usize>,
 }
 
@@ -162,6 +164,7 @@ impl Session {
             polling: false,
             appearance,
             appearance_generation: 0,
+            pane_size: (0.0, 0.0),
             input_start_row: None,
         }
     }
@@ -200,6 +203,7 @@ impl Session {
             polling: false,
             appearance,
             appearance_generation: 0,
+            pane_size: (0.0, 0.0),
             input_start_row: None,
         };
         session.drain(true);

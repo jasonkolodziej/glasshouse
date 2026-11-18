@@ -28,6 +28,10 @@ pub enum Shortcut {
     SelectTab(usize),
     NextTab,
     PreviousTab,
+    /// Tabs in panes left to right, or back to one tab if they already are.
+    SplitSideBySide,
+    /// Tabs in panes top to bottom, or back to one tab if they already are.
+    SplitStacked,
 }
 
 /// The shortcut `ev` triggers on this platform, if any.
@@ -67,6 +71,9 @@ pub fn shortcut_for(ev: &KeyEvent, mac: bool) -> Option<Shortcut> {
             (Key::Command(','), false) => Some(Shortcut::Settings),
             (Key::Command('c'), false) => Some(Shortcut::Copy),
             (Key::Command('v'), false) => Some(Shortcut::Paste),
+            // As in iTerm: ⌘D splits side by side, ⇧⌘D stacked.
+            (Key::Command('d' | 'D'), false) => Some(Shortcut::SplitSideBySide),
+            (Key::Command('d' | 'D'), true) => Some(Shortcut::SplitStacked),
             // Rune reports the character Shift types, so ⇧⌘] arrives as `}` on a US layout.
             (Key::Command(']' | '}'), true) => Some(Shortcut::NextTab),
             (Key::Command('[' | '{'), true) => Some(Shortcut::PreviousTab),
@@ -95,6 +102,9 @@ pub fn shortcut_for(ev: &KeyEvent, mac: bool) -> Option<Shortcut> {
         (Key::Command('s'), true) => Some(Shortcut::ToggleSidebar),
         (Key::Command('c'), true) => Some(Shortcut::Copy),
         (Key::Command('v'), true) => Some(Shortcut::Paste),
+        // Ctrl+D (EOF) stays the shell's: splitting takes Shift, and Alt for stacked.
+        (Key::Command('d' | 'D'), true) if m.alt => Some(Shortcut::SplitStacked),
+        (Key::Command('d' | 'D'), true) => Some(Shortcut::SplitSideBySide),
         (Key::Up, true) => Some(Shortcut::PreviousPrompt),
         (Key::Down, true) => Some(Shortcut::NextPrompt),
         (Key::Command(c @ '1'..='9'), false) if m.alt => Some(Shortcut::SelectTab(digit(*c))),
@@ -152,6 +162,10 @@ pub fn label_for(shortcut: Shortcut, mac: bool) -> &'static str {
         (S::PreviousTab, false) => "Ctrl+Shift+Tab",
         (S::SelectTab(_), true) => "⌘1…9",
         (S::SelectTab(_), false) => "Alt+Ctrl+1…9",
+        (S::SplitSideBySide, true) => "⌘D",
+        (S::SplitSideBySide, false) => "Ctrl+Shift+D",
+        (S::SplitStacked, true) => "⇧⌘D",
+        (S::SplitStacked, false) => "Alt+Ctrl+Shift+D",
     }
 }
 
@@ -295,6 +309,35 @@ mod tests {
         let e = ev(Key::PageUp, false, false, false);
         assert_eq!(shortcut_for(&e, true), None);
         assert_eq!(terminal_key(&e).map(|(k, _)| k), Some(TermKey::PageUp));
+    }
+
+    #[test]
+    fn mac_cmd_d_should_split_side_by_side_and_shift_cmd_d_stacked() {
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('d'), false, true, false), true),
+            Some(Shortcut::SplitSideBySide)
+        );
+        for d in ['d', 'D'] {
+            assert_eq!(
+                shortcut_for(&ev(Key::Command(d), true, true, false), true),
+                Some(Shortcut::SplitStacked)
+            );
+        }
+    }
+
+    #[test]
+    fn linux_split_shortcuts_should_leave_ctrl_d_to_the_shell() {
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('d'), false, true, true), false),
+            None
+        );
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('d'), true, true, true), false),
+            Some(Shortcut::SplitSideBySide)
+        );
+        let mut stacked = ev(Key::Command('d'), true, true, true);
+        stacked.mods.alt = true;
+        assert_eq!(shortcut_for(&stacked, false), Some(Shortcut::SplitStacked));
     }
 
     #[test]
