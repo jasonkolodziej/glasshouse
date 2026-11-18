@@ -50,16 +50,40 @@ Pushing a `v*` tag runs [`release.yml`](.github/workflows/release.yml), which pu
 release with:
 
 - `Glasshouse-<version>-macos-universal.dmg` / `.zip`: `Glasshouse.app` for Apple silicon and Intel,
-  with the app icon and the Glasshouse Agent inside (ad-hoc signed, so the first launch needs
-  right-click → Open)
+  with the app icon and the Glasshouse Agent inside. It's ad-hoc signed, not notarized, so macOS
+  blocks the first launch: allow it in System Settings → Privacy & Security → Open Anyway, or run
+  `xattr -dr com.apple.quarantine /Applications/Glasshouse.app`
 - `glasshouse-<version>-linux-<arch>.tar.gz` for x86_64 and aarch64: the binaries, a `.desktop`
   entry and the icon at every hicolor size, laid out as a `/usr/local` prefix
+- `SHA256SUMS.txt` and its SSH signature, `SHA256SUMS.txt.sig`
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
 scripts/package-macos.sh     # or build the same archives locally, into dist/
 scripts/package-linux.sh
 ```
+
+#### Verifying a download
+
+With the [GitHub CLI](https://cli.github.com), check that a file was built by this repository's
+release workflow:
+
+```sh
+gh attestation verify Glasshouse-0.1.4-macos-universal.dmg --repo jasonkolodziej/glasshouse
+```
+
+Without it, use `ssh-keygen`, which comes with macOS and Linux. Download
+[`packaging/allowed_signers`](packaging/allowed_signers) from this repository (not from the
+release), then, next to the downloads:
+
+```sh
+ssh-keygen -Y verify -f allowed_signers -I jasonkolodziej -n file \
+  -s SHA256SUMS.txt.sig < SHA256SUMS.txt   # Good "file" signature for jasonkolodziej …
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+The key in `allowed_signers` is also listed on GitHub at
+<https://api.github.com/users/jasonkolodziej/ssh_signing_keys>. Releases before v0.1.4 aren't signed.
 
 The icon is [`docs/icon.png`](docs/icon.png) (`AppIconC`), turned into `AppIcon.icns` for the bundle
 and also set at runtime, so `cargo run` shows it in the Dock.

@@ -94,7 +94,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Build provenance attestations: a Sigstore certificate from the run's OIDC token.
+      id-token: write
+      attestations: write
     steps:
+      # Only for packaging/allowed_signers, which checks the signature below.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: packaging
+
       - name: Download archives
         uses: actions/download-artifact@v4
         with:
@@ -104,6 +113,35 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      # SHA256SUMS.txt.sig, for people without `gh`: verified with ssh-keygen, which macOS and
+      # Linux both ship. The secret is the private half of the key in packaging/allowed_signers.
+      - name: Sign the checksums with the release SSH key
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SSH_SIGNING_KEY }}
+        run: |
+          if [[ -z "$SIGNING_KEY" ]]; then
+            echo "::error::Set the RELEASE_SSH_SIGNING_KEY secret to sign the release."
+            exit 1
+          fi
+          key=$RUNNER_TEMP/release_signing_key
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$SIGNING_KEY" > "$key")
+          ssh-keygen -q -Y sign -f "$key" -n file dist/SHA256SUMS.txt
+          # Fails the release if the secret isn't the published key.
+          ssh-keygen -Y verify -f packaging/allowed_signers -I jasonkolodziej -n file \
+            -s dist/SHA256SUMS.txt.sig < dist/SHA256SUMS.txt
+
+      # For `gh attestation verify FILE --repo OWNER/REPO`: proves each file was built by this
+      # workflow from this commit, with no key to keep.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
 
       # A release made on GitHub's web form creates the tag, which starts this run, so the release
       # can exist before the builds finish. Then add the files to it and keep its title and notes.
