@@ -53,3 +53,50 @@ fn bold_default_text_without_a_bold_colour_should_use_the_foreground() {
     e.feed(b"\x1b[1mB");
     assert_eq!(first_cell_fg(&e), TerminalAppearance::default().foreground);
 }
+
+fn long_output(e: &PtyTerminal) {
+    for i in 0..50 {
+        e.feed(format!("line {i}\r\n").as_bytes());
+    }
+}
+
+#[test]
+fn wheel_on_the_primary_screen_should_scroll_back_through_history() {
+    let e = engine(None, false);
+    long_output(&e);
+    let bottom = e.top_visible_row();
+    e.wheel(5, 0, 0, terminal_core::Modifiers::default());
+    assert_eq!(e.top_visible_row(), bottom - 5);
+    assert_eq!(e.snapshot().display_offset, 5);
+    e.wheel(-2, 0, 0, terminal_core::Modifiers::default());
+    assert_eq!(e.top_visible_row(), bottom - 3);
+}
+
+#[test]
+fn wheel_should_stop_at_the_ends_of_history() {
+    let e = engine(None, false);
+    long_output(&e);
+    e.wheel(-10, 0, 0, terminal_core::Modifiers::default());
+    assert_eq!(e.snapshot().display_offset, 0);
+    e.wheel(10_000, 0, 0, terminal_core::Modifiers::default());
+    assert_eq!(e.top_visible_row(), 0);
+}
+
+#[test]
+fn wheel_on_the_alternate_screen_should_leave_the_viewport_to_the_program() {
+    let e = engine(None, false);
+    long_output(&e);
+    e.feed(b"\x1b[?1049h");
+    e.wheel(5, 0, 0, terminal_core::Modifiers::default());
+    assert_eq!(e.snapshot().display_offset, 0);
+}
+
+#[test]
+fn output_arriving_while_scrolled_back_should_keep_the_view_still() {
+    let e = engine(None, false);
+    long_output(&e);
+    e.wheel(5, 0, 0, terminal_core::Modifiers::default());
+    let top = e.top_visible_row();
+    e.feed(b"more\r\n");
+    assert_eq!(e.top_visible_row(), top);
+}

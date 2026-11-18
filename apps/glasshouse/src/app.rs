@@ -4,13 +4,13 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use glasshouse_security::{SecureKeyboardEntry, TouchIDSudo, TouchIDSudoStatus};
-use rune::{KeyEvent, LiveRegion, TextEdit, Tx, Waker};
+use rune::{KeyEvent, LiveRegion, TextEdit, Tx, Waker, WheelEvent};
 use shell_integration::CommandRecord;
 use ssh_config::{
     ManagedSshConfig, ManagedSshHost, SshConfigConflict, SshConfigStore, SshIncludeStatus,
     SshKeyFile, glasshouse_ssh_scripts,
 };
-use terminal_core::{GridSize, TerminalAppearance, TerminalEngine};
+use terminal_core::{GridSize, Modifiers, TerminalAppearance, TerminalEngine};
 
 use crate::appearance::{Accessibility, ThemeLibrary, terminal_appearance};
 use crate::hosts::{self, SshHost};
@@ -203,6 +203,8 @@ pub struct App {
     pub hovered_tab: Option<u64>,
     pub hovered_tick: Option<usize>,
     pub blink_on: bool,
+    /// Wheel travel not yet worth a whole line, in lines (trackpads send fractions).
+    wheel_rest: f32,
     pub secure_always: bool,
     /// The window's size in points, from layout (the wallpaper places its light by it).
     pub window: (f32, f32),
@@ -251,6 +253,7 @@ impl App {
             hovered_tab: None,
             hovered_tick: None,
             blink_on: true,
+            wheel_rest: 0.0,
             secure_always: false,
             window: (0.0, 0.0),
             showcase: false,
@@ -628,6 +631,40 @@ impl App {
         }
     }
 
+    /// A wheel or trackpad scroll over the grid area, at (`x`, `y`) in its own points: whole
+    /// lines go to the selected tab (scrollback, or the program on the alternate screen).
+    pub fn on_wheel(&mut self, ev: WheelEvent) -> bool {
+        if ev.dy == 0.0 {
+            return false;
+        }
+        let Some(index) = self.selected_index() else {
+            return false;
+        };
+        let cell = self
+            .cell
+            .unwrap_or_else(|| crate::ui::grid::measure_cell(&self.sessions[index].appearance));
+        let step = if ev.precise {
+            ev.dy / cell.height.max(1.0)
+        } else {
+            ev.dy / WHEEL_NOTCH_POINTS * WHEEL_NOTCH_LINES
+        };
+        let lines = take_whole_lines(&mut self.wheel_rest, step);
+        if lines != 0 {
+            let session = &self.sessions[index];
+            let a = &session.appearance;
+            let size = session.engine().size();
+            let col = cell_index(ev.x - a.padding_horizontal, cell.width, size.cols);
+            let row = cell_index(ev.y - a.padding_vertical, cell.height, size.rows);
+            let mods = Modifiers {
+                shift: ev.mods.shift,
+                control: ev.mods.ctrl,
+                alt: ev.mods.alt,
+            };
+            session.wheel(lines, col, row, mods);
+        }
+        true
+    }
+
     pub fn run_shortcut(&mut self, shortcut: Shortcut, tx: &mut Tx) {
         match shortcut {
             Shortcut::NewTab => self.new_tab(),
@@ -638,6 +675,8 @@ impl App {
             }
             Shortcut::CloseWindow => tx.close_window(),
             Shortcut::CommandPalette | Shortcut::OpenHost => self.open_palette(tx),
+            Shortcut::ScrollPageUp => self.with_selected(|s| s.scroll_page(true)),
+            Shortcut::ScrollPageDown => self.with_selected(|s| s.scroll_page(false)),
             Shortcut::PreviousPrompt => self.with_selected(Session::jump_to_previous_prompt),
             Shortcut::NextPrompt => self.with_selected(Session::jump_to_next_prompt),
             Shortcut::CopyLastOutput => {
@@ -907,6 +946,37 @@ impl App {
 }
 
 /// After removing index `removed`, the tab to select: the right-hand neighbour, else the left one.
+/// Points Rune reports for one notch of a mouse wheel (its `LINE_POINTS`): winit's line delta
+/// scaled, larger on Linux.
+const WHEEL_NOTCH_POINTS: f32 = if cfg!(target_os = "linux") {
+    120.0
+} else {
+    40.0
+};
+/// Lines one wheel notch scrolls, as in Terminal.app, xterm and Alacritty.
+const WHEEL_NOTCH_LINES: f32 = 3.0;
+
+/// Adds `step` lines of travel to `rest` and takes out the whole lines, keeping the fraction.
+/// Reversing direction drops the leftover, so a turn never starts with a stale partial line.
+fn take_whole_lines(rest: &mut f32, step: f32) -> i32 {
+    if *rest != 0.0 && rest.signum() != step.signum() {
+        *rest = 0.0;
+    }
+    *rest += step;
+    let whole = rest.trunc();
+    *rest -= whole;
+    whole as i32
+}
+
+/// The 0-based cell under `offset` points into the grid, clamped onto it.
+fn cell_index(offset: f32, cell: f32, count: u16) -> usize {
+    let last = usize::from(count.max(1) - 1);
+    if offset <= 0.0 || cell <= 0.0 {
+        return 0;
+    }
+    ((offset / cell) as usize).min(last)
+}
+
 pub fn neighbour_after_close(remaining: &[u64], removed: usize) -> Option<u64> {
     if remaining.is_empty() {
         return None;
@@ -917,6 +987,39 @@ pub fn neighbour_after_close(remaining: &[u64], removed: usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn take_whole_lines_should_carry_trackpad_fractions_until_a_line_is_due() {
+        let mut rest = 0.0;
+        assert_eq!(take_whole_lines(&mut rest, 0.4), 0);
+        assert_eq!(take_whole_lines(&mut rest, 0.4), 0);
+        assert_eq!(take_whole_lines(&mut rest, 0.4), 1);
+        assert!((rest - 0.2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn take_whole_lines_should_drop_the_leftover_when_the_direction_turns() {
+        let mut rest = 0.0;
+        assert_eq!(take_whole_lines(&mut rest, 0.9), 0);
+        assert_eq!(take_whole_lines(&mut rest, -0.5), 0);
+        assert!((rest + 0.5).abs() < 1e-5);
+        assert_eq!(take_whole_lines(&mut rest, -2.5), -3);
+    }
+
+    #[test]
+    fn a_mouse_wheel_notch_should_scroll_three_lines() {
+        let mut rest = 0.0;
+        let step = WHEEL_NOTCH_POINTS / WHEEL_NOTCH_POINTS * WHEEL_NOTCH_LINES;
+        assert_eq!(take_whole_lines(&mut rest, step), 3);
+        assert_eq!(take_whole_lines(&mut rest, -step), -3);
+    }
+
+    #[test]
+    fn cell_index_should_clamp_onto_the_grid() {
+        assert_eq!(cell_index(-4.0, 8.0, 80), 0);
+        assert_eq!(cell_index(17.0, 8.0, 80), 2);
+        assert_eq!(cell_index(10_000.0, 8.0, 80), 79);
+    }
 
     #[test]
     fn neighbour_after_close_should_pick_the_right_hand_tab() {

@@ -17,7 +17,7 @@ use shell_integration::{LaunchPlan, OscScanner};
 use crate::snapshot::{self, Palette, TerminalModes};
 use crate::{
     EngineError, EngineEvent, GridSize, GridSnapshot, Key, Modifiers, TerminalAppearance,
-    TerminalCursorShape, TerminalEngine, Waker, encode_key, encode_paste,
+    TerminalCursorShape, TerminalEngine, Waker, encode_key, encode_mouse_wheel, encode_paste,
 };
 
 /// Construction options for [`PtyTerminal`].
@@ -25,7 +25,8 @@ use crate::{
 pub struct PtyTerminalOptions {
     /// Initial grid size.
     pub size: GridSize,
-    /// Maximum scrollback lines.
+    /// Maximum scrollback lines. 50,000 holds a `tree` of a home folder or a long build log;
+    /// lines are allocated as history fills, so a short session costs no more than before.
     pub scrollback: usize,
     /// Initial appearance.
     pub appearance: TerminalAppearance,
@@ -35,7 +36,7 @@ impl Default for PtyTerminalOptions {
     fn default() -> Self {
         Self {
             size: GridSize::default(),
-            scrollback: 10_000,
+            scrollback: 50_000,
             appearance: TerminalAppearance::default(),
         }
     }
@@ -239,6 +240,39 @@ impl PtyTerminal {
     /// Scrolls the viewport by `delta` lines (positive = back into history).
     pub fn scroll_lines(&self, delta: i32) {
         self.term().scroll_display(Scroll::Delta(delta));
+    }
+
+    /// A mouse wheel or trackpad scroll of `lines` whole lines (positive = toward older output)
+    /// over 0-based cell (`col`, `row`), routed as xterm and Alacritty do:
+    ///
+    /// - a program that asked for mouse reports (vim, htop) gets wheel reports, unless Shift is
+    ///   held, which keeps the wheel for the terminal;
+    /// - on the alternate screen (less, man) with alternate scroll on, arrow keys;
+    /// - otherwise the viewport moves through scrollback.
+    pub fn wheel(&self, lines: i32, col: usize, row: usize, mods: Modifiers) {
+        if lines == 0 {
+            return;
+        }
+        let modes = self.modes();
+        let up = lines > 0;
+        let count = lines.unsigned_abs() as usize;
+        // A failed write means the shell has gone; the Exited event reports that.
+        if modes.mouse_reporting && !mods.shift {
+            let _ = self.send(&encode_mouse_wheel(
+                up,
+                count,
+                col,
+                row,
+                mods,
+                modes.sgr_mouse,
+            ));
+        } else if modes.alt_screen && modes.alternate_scroll {
+            let key = if up { Key::Up } else { Key::Down };
+            let _ =
+                self.send(&encode_key(&key, Modifiers::default(), modes.app_cursor).repeat(count));
+        } else {
+            self.scroll_lines(lines);
+        }
     }
 
     /// Processes `bytes` as if the PTY had produced them, without a shell: demo sessions and

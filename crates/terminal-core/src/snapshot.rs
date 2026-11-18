@@ -202,6 +202,8 @@ pub struct TerminalModes {
     pub mouse_reporting: bool,
     /// Mouse reports use SGR encoding.
     pub sgr_mouse: bool,
+    /// DECSET 1007: on the alternate screen, the wheel sends arrow keys (on by default).
+    pub alternate_scroll: bool,
     /// A program asked for focus in/out reports.
     pub focus_reporting: bool,
 }
@@ -216,6 +218,7 @@ impl TerminalModes {
             show_cursor: mode.contains(TermMode::SHOW_CURSOR),
             mouse_reporting: mode.intersects(TermMode::MOUSE_MODE),
             sgr_mouse: mode.contains(TermMode::SGR_MOUSE),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
             focus_reporting: mode.contains(TermMode::FOCUS_IN_OUT),
         }
     }

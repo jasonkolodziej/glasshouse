@@ -7,8 +7,8 @@ use std::sync::{Mutex, OnceLock};
 
 use design_system::gh;
 use rune::tok::Family;
-use rune::{Color, El, GridRow, Span, TextStyle, col, el, grid, row, text};
-use shell_integration::CommandStatus;
+use rune::{Color, El, GridRow, Span, TextStyle, WheelEvent, col, el, grid, row, text};
+use shell_integration::{CommandRecord, CommandStatus};
 use terminal_core::{CellFlags, GridLine, TerminalAppearance, TerminalCursorShape, TerminalEngine};
 
 use design_system::TrustState;
@@ -77,6 +77,8 @@ pub fn pane(app: &App, ink: &Ink) -> El {
         // A grid wider than the pane (before a resize lands) must not draw over the gutter.
         .clip_rounded(0.0)
         .on_layout(|s: &mut App, r: [f32; 4]| s.set_pane_size(r[2], r[3]))
+        // Scrollback, or the program's own scrolling on the alternate screen.
+        .on_wheel(|s: &mut App, ev: WheelEvent, _| s.on_wheel(ev))
         .child(screen(app, session, cell, ink));
 
     let mut pane = col()
@@ -136,25 +138,61 @@ pub fn pane(app: &App, ink: &Ink) -> El {
 const HEADER_HEIGHT: f32 = 28.0;
 const STATUS_HEIGHT: f32 = 24.0;
 
-/// `⠿   running command   duration`: the command the tab is running, or last ran.
-fn header(session: &Session, ink: &Ink) -> El {
-    let record = session.timeline.commands().iter().rev().find(|r| {
-        r.command_line
-            .as_deref()
-            .is_some_and(|c| !c.trim().is_empty())
-    });
-    let command = record
-        .and_then(|r| r.command_line.as_deref())
-        .map(strip_prompt);
-    let (title, running) = match (&command, record.map(|r| r.status())) {
-        (Some(c), Some(CommandStatus::Running)) => (c.clone(), true),
-        (Some(c), _) => (c.clone(), false),
-        _ => (session.title.clone(), false),
+/// The command a pane header names, and whether it is pinned to scrolled-back output.
+///
+/// At the bottom it is the latest command (what the tab is running, or last ran). Scrolled back
+/// it is the command whose output is at the top of the view, as VS Code's sticky scroll shows it,
+/// so a long command's name stays in sight through its output. Prompts with nothing typed after
+/// them (an empty Return, a ^C) never name the header.
+pub fn pane_command(
+    records: &[CommandRecord],
+    top_row: usize,
+    at_bottom: bool,
+) -> Option<PaneCommand<'_>> {
+    fn named(record: &CommandRecord, pinned: bool) -> Option<PaneCommand<'_>> {
+        let name = strip_prompt(record.command_line.as_deref()?);
+        (!name.is_empty()).then_some(PaneCommand {
+            record,
+            name,
+            pinned,
+        })
+    }
+    let pinned = if at_bottom {
+        None
+    } else {
+        records
+            .iter()
+            .rev()
+            .filter(|r| r.prompt_row <= top_row)
+            .find_map(|r| named(r, true))
     };
-    let duration = record
-        .and_then(|r| r.duration_at(std::time::SystemTime::now()))
+    pinned.or_else(|| records.iter().rev().find_map(|r| named(r, false)))
+}
+
+/// What [`pane_command`] picked for the header.
+pub struct PaneCommand<'a> {
+    pub record: &'a CommandRecord,
+    /// The typed command, without the prompt.
+    pub name: String,
+    /// Scrolled back: the command whose output is in view, rather than the latest.
+    pub pinned: bool,
+}
+
+/// `⠿   command   duration`: the command the tab is running or last ran, or, scrolled back, the
+/// one whose output is in view. Pressing it scrolls to that command's prompt.
+fn header(session: &Session, ink: &Ink) -> El {
+    let engine = session.engine();
+    let top = engine.top_visible_row();
+    let at_bottom = engine.snapshot().display_offset == 0;
+    let picked = pane_command(session.timeline.commands(), top, at_bottom);
+    let picked = picked.as_ref();
+    let running = picked.is_some_and(|p| p.record.status() == CommandStatus::Running);
+    let pinned = picked.is_some_and(|p| p.pinned);
+    let title = picked.map_or_else(|| session.title.clone(), |p| p.name.clone());
+    let duration = picked
+        .and_then(|p| p.record.duration_at(std::time::SystemTime::now()))
         .map(format_duration);
-    row()
+    let mut bar = row()
         .key("pane-header")
         .w_full()
         .h(HEADER_HEIGHT)
@@ -162,22 +200,49 @@ fn header(session: &Session, ink: &Ink) -> El {
         .gap(10.0)
         .center_y()
         .fill(ink.surface(ink.panel))
-        .child(text("⠿").font(style(UI, 600.0)).color(ink.tertiary))
+        .child(
+            text(if pinned { "↑" } else { "⠿" })
+                .font(style(UI, 600.0))
+                .color(if pinned { ink.accent } else { ink.tertiary }),
+        )
         .child(el().grow(1.0))
         .child(
-            text(title)
+            text(title.clone())
                 .font(style(UI, 650.0))
-                .color(if running { ink.text } else { ink.secondary })
+                .color(if running || pinned {
+                    ink.text
+                } else {
+                    ink.secondary
+                })
                 .truncate()
                 .max_w(560.0),
         )
         .child(el().grow(1.0))
-        .children(duration.map(|d| text(d).font(style(UI, 500.0)).color(ink.tertiary)))
+        .children(duration.map(|d| text(d).font(style(UI, 500.0)).color(ink.tertiary)));
+    if let Some(p) = picked {
+        let record = p.record.clone();
+        let help = format!("Scroll to the start of {title}");
+        bar = bar
+            .role("button")
+            .label(help.clone())
+            .help(help)
+            .hit()
+            .on_press(move |s: &mut App| {
+                if let Some(session) = s.selected() {
+                    session.jump_to(&record);
+                }
+            });
+    }
+    bar
 }
 
 /// The typed command from a captured line that starts with the prompt (display only).
 pub fn strip_prompt(line: &str) -> String {
-    let line = line.lines().next().unwrap_or(line);
+    let line = line.lines().next().unwrap_or(line).trim_end();
+    // A bare prompt (`host Desktop %`): the marker ends the line, with nothing typed after it.
+    if ["❯", "$", "%", "#", ">"].iter().any(|m| line.ends_with(m)) {
+        return String::new();
+    }
     ["❯ ", "$ ", "% ", "# ", "> "]
         .iter()
         .filter_map(|marker| line.rfind(marker).map(|i| i + marker.len()))
@@ -565,4 +630,63 @@ fn gutter(session: &Session, ink: &Ink, height: f32) -> El {
         .w(gh::size::GUTTER_WIDTH + 4.0)
         .h_full()
         .children(ticks)
+}
+
+#[cfg(test)]
+mod tests {
+    use shell_integration::{CommandTimeline, ShellEvent};
+
+    use super::*;
+
+    fn run(t: &mut CommandTimeline, prompt: usize, line: &str, end: usize) {
+        t.apply(&ShellEvent::PromptStart, prompt);
+        t.set_command_line(line);
+        t.apply(&ShellEvent::OutputStart, prompt + 1);
+        t.apply(&ShellEvent::CommandFinished { exit_code: Some(0) }, end);
+    }
+
+    fn timeline() -> CommandTimeline {
+        let mut t = CommandTimeline::new();
+        run(&mut t, 0, "me@host ~ % ls", 5);
+        run(&mut t, 5, "me@host ~ % tree", 30_000);
+        // An empty Return at the next prompt.
+        t.apply(&ShellEvent::PromptStart, 30_000);
+        t.set_command_line("me@host Desktop %");
+        t.apply(&ShellEvent::OutputStart, 30_001);
+        t
+    }
+
+    #[test]
+    fn strip_prompt_should_leave_nothing_for_a_bare_prompt() {
+        assert_eq!(strip_prompt("me@host Desktop % tree"), "tree");
+        assert_eq!(strip_prompt("me@host Desktop %"), "");
+        assert_eq!(strip_prompt("me@host Desktop % "), "");
+    }
+
+    #[test]
+    fn header_at_the_bottom_should_name_the_latest_typed_command() {
+        let t = timeline();
+        let p = pane_command(t.commands(), 29_980, true).expect("a command");
+        assert_eq!((p.name.as_str(), p.pinned), ("tree", false));
+    }
+
+    #[test]
+    fn header_scrolled_back_should_pin_the_command_whose_output_is_in_view() {
+        let t = timeline();
+        let p = pane_command(t.commands(), 12_000, false).expect("a command");
+        assert_eq!(
+            (p.name.as_str(), p.pinned, p.record.prompt_row),
+            ("tree", true, 5)
+        );
+        let p = pane_command(t.commands(), 2, false).expect("a command");
+        assert_eq!(p.name, "ls");
+    }
+
+    #[test]
+    fn header_above_every_command_should_fall_back_to_the_latest() {
+        let mut t = CommandTimeline::new();
+        run(&mut t, 50, "$ make", 60);
+        let p = pane_command(t.commands(), 10, false).expect("a command");
+        assert_eq!((p.name.as_str(), p.pinned), ("make", false));
+    }
 }
