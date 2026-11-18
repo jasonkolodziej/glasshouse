@@ -800,6 +800,14 @@ fn appearance(app: &App, s: &SettingsState, ink: &Ink) -> El {
         .min_by_key(|(p, _)| (f64::from(*p) - opacity * 100.0).abs() as i64)
         .map_or(100, |(p, _)| *p);
 
+    let rail_size = config.rail_icon_size();
+    let rail_steps: [(u8, &'static str); 4] =
+        [(12, "Small"), (14, "Medium"), (18, "Large"), (22, "Huge")];
+    let rail_now = rail_steps
+        .iter()
+        .min_by_key(|(p, _)| (f64::from(*p) - rail_size).abs() as i64)
+        .map_or(14, |(p, _)| *p);
+
     let mut page = col()
         .w_full()
         .gap(22.0)
@@ -828,7 +836,13 @@ fn appearance(app: &App, s: &SettingsState, ink: &Ink) -> El {
             segmented("opacity", &opacity_steps, opacity_now, ink, |a, v| {
                 a.update_appearance(|c| c.window.opacity = Some(f64::from(v) / 100.0))
             }),
-        ))).child(note("Below 100% the window turns to glass: the desktop shows through, blurred by Liquid Glass on macOS. Increase Contrast and Reduce Transparency make it opaque.", ink)))
+        ))).child(note("Below 100% the window turns to glass: the desktop shows through, blurred by Liquid Glass on macOS. Increase Contrast and Reduce Transparency make it opaque.", ink))
+            .child(group(ink).child(line(ink).child(label("Rail icon size", ink).grow(1.0)).child(
+                segmented("rail-icon-size", &rail_steps, rail_now, ink, |a, v| {
+                    a.update_appearance(|c| c.rail_icon_size = Some(f64::from(v)))
+                }),
+            )))
+            .child(note("The buttons down the right-hand side: palette, new tab, sidebar, find, copy, clear and settings.", ink)))
         .child(section("Contrast", ink).child(group(ink).child(line(ink).child(label("Minimum contrast", ink).grow(1.0)).child(
             segmented(
                 "contrast",

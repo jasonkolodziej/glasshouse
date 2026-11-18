@@ -439,6 +439,30 @@ mod tests {
     }
 
     #[test]
+    fn rail_icon_size_is_saved_only_when_set_and_kept_in_range() {
+        let sandbox = Sandbox::new();
+        let mut config = AppearanceConfig::default();
+        assert_eq!(
+            config.rail_icon_size(),
+            AppearanceConfig::DEFAULT_RAIL_ICON_SIZE
+        );
+        sandbox.store.save_config(&config).expect("save");
+        let written = fs::read_to_string(&sandbox.store.config_path).expect("read");
+        assert!(!written.contains("rail-icon-size"), "{written}");
+
+        config.rail_icon_size = Some(20.0);
+        sandbox.store.save_config(&config).expect("save");
+        let written = fs::read_to_string(&sandbox.store.config_path).expect("read");
+        assert!(written.contains("rail-icon-size: 20\n"), "{written}");
+        assert_eq!(sandbox.store.load_config().rail_icon_size(), 20.0);
+
+        config.rail_icon_size = Some(40.0);
+        assert!(sandbox.store.save_config(&config).is_err());
+        sandbox.write("rail-icon-size: 4\n", "appearance.yaml");
+        assert_eq!(sandbox.store.load_config(), AppearanceConfig::default());
+    }
+
+    #[test]
     fn resolves_a_missing_theme_to_glasshouses() {
         let sandbox = Sandbox::new();
         let mut config = AppearanceConfig::default();

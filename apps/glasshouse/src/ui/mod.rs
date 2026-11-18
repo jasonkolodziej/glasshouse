@@ -36,7 +36,6 @@ pub const MONO_FAMILIES: &str =
 
 pub const TITLE_HEIGHT: f32 = 34.0;
 pub const BAR_HEIGHT: f32 = 26.0;
-pub const RAIL_WIDTH: f32 = 40.0;
 pub const SIDEBAR_WIDTH: f32 = 260.0;
 /// Below this window opacity the chrome turns to frosted glass over the wallpaper.
 const GLASS_BELOW: f32 = 0.999;
@@ -155,17 +154,23 @@ pub fn titled(e: El, title: &str, ink: &Ink) -> El {
     )
 }
 
-/// A one-glyph button in the rail.
-pub fn icon_button(key: &str, glyph: &str, label: &str, ink: &Ink) -> El {
+/// A one-glyph button in the rail; `size` is the glyph's, in points (Settings → Appearance).
+/// At the default 14 pt the button is 30 × 28.
+pub fn icon_button(key: &str, glyph: &str, label: &str, size: f32, ink: &Ink) -> El {
     row()
         .key(key)
         .role("button")
         .label(label)
         .hit()
-        .size(30.0, 28.0)
+        .size(size + 16.0, size + 14.0)
         .center()
         .hover(ink.selected)
-        .child(text(glyph).font(style(14.0, 500.0)).color(ink.secondary))
+        .child(text(glyph).font(style(size, 500.0)).color(ink.secondary))
+}
+
+/// The rail's width for a glyph size: 40 at the default, growing with larger glyphs.
+pub fn rail_width(icon_size: f32) -> f32 {
+    (icon_size + 26.0).max(40.0)
 }
 
 /// `[ label ]`: prominent buttons take the accent.
@@ -225,7 +230,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
         .children(app.show_sidebar.then(|| vrule(&ink)))
         .child(grid::pane(app, &ink))
         .child(vrule(&ink))
-        .child(rail(&ink));
+        .child(rail(app, &ink));
 
     let frame = col()
         .w_full()
@@ -496,14 +501,15 @@ fn trust_block(trust: &TrustState, ink: &Ink) -> El {
 
 // MARK: Rail and hint bar
 
-fn rail(ink: &Ink) -> El {
+fn rail(app: &App, ink: &Ink) -> El {
+    let size = app.themes.config.rail_icon_size() as f32;
     let item = |key: &str, glyph: &str, label: &str, shortcut: Shortcut| {
-        icon_button(key, glyph, label, ink)
+        icon_button(key, glyph, label, size, ink)
             .help(format!("{label} ({})", shortcuts::label(shortcut)))
     };
     col()
         .key("rail")
-        .w(RAIL_WIDTH)
+        .w(rail_width(size))
         .h_full()
         .py(8.0)
         .gap(4.0)

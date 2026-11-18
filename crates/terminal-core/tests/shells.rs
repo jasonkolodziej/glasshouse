@@ -21,6 +21,7 @@ fn find(shell: &str) -> Option<String> {
 
 /// Shell events until `stop` matches one, with the cursor row each arrived at.
 fn shell_events_until(
+    engine: &PtyTerminal,
     rx: &Receiver<EngineEvent>,
     stop: impl Fn(&ShellEvent) -> bool,
 ) -> Vec<(ShellEvent, usize)> {
@@ -40,7 +41,8 @@ fn shell_events_until(
             Err(_) => break,
         }
     }
-    panic!("timed out; shell events so far: {seen:?}");
+    let screen = engine.text(0, engine.cursor_absolute_row() + 1);
+    panic!("timed out; shell events so far: {seen:?}; screen:\n{screen}");
 }
 
 fn marks_frame_the_command(shell: &str) {
@@ -53,6 +55,10 @@ fn marks_frame_the_command(shell: &str) {
     let environment: HashMap<String, String> = [
         ("PATH", "/usr/local/bin:/usr/bin:/bin"),
         ("TERM", "xterm-256color"),
+        // Ubuntu's /etc/zsh/zshrc runs compinit, which stops at a y/n question before the first
+        // prompt when the machine has group- or world-writable completion directories (as GitHub's
+        // runners do). Its zshrc skips compinit when this is set; other shells ignore it.
+        ("skip_global_compinit", "1"),
         ("HOME", &home.path().to_string_lossy()),
         (
             "XDG_CONFIG_HOME",
@@ -78,7 +84,7 @@ fn marks_frame_the_command(shell: &str) {
         .unwrap_or_else(|e| panic!("{shell} starts: {e}"));
 
     // The first prompt: A, then B once it is drawn.
-    let first = shell_events_until(&rx, |e| *e == ShellEvent::InputStart);
+    let first = shell_events_until(&engine, &rx, |e| *e == ShellEvent::InputStart);
     assert!(
         first.iter().any(|(e, _)| *e == ShellEvent::PromptStart),
         "{shell}: no A before B: {first:?}"
@@ -88,7 +94,9 @@ fn marks_frame_the_command(shell: &str) {
     engine
         .send_text("printf '%s-%s\\n' glass house\r")
         .unwrap_or_else(|e| panic!("type a command: {e}"));
-    let run = shell_events_until(&rx, |e| matches!(e, ShellEvent::CommandFinished { .. }));
+    let run = shell_events_until(&engine, &rx, |e| {
+        matches!(e, ShellEvent::CommandFinished { .. })
+    });
     let row_of = |wanted: &dyn Fn(&ShellEvent) -> bool| {
         first
             .iter()
