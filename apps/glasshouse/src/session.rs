@@ -384,6 +384,18 @@ impl Session {
         self.engine.scroll_to_bottom();
     }
 
+    /// A wheel of `lines` (positive = toward older output) over grid cell (`col`, `row`).
+    pub fn wheel(&self, lines: i32, col: usize, row: usize, mods: Modifiers) {
+        self.engine.wheel(lines, col, row, mods);
+    }
+
+    /// Moves the viewport a screen's height through scrollback (`up` = toward older output),
+    /// keeping one line of context.
+    pub fn scroll_page(&self, up: bool) {
+        let page = i32::from(self.engine.size().rows.saturating_sub(1).max(1));
+        self.engine.scroll_lines(if up { page } else { -page });
+    }
+
     pub fn resize(&self, size: GridSize) {
         if self.engine.size() != size {
             let _ = self.engine.resize(size);

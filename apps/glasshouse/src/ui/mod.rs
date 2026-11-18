@@ -13,7 +13,7 @@
 //! macOS 26), so the desktop blurs through, as in Rune's `glass-card` example. Headless renders
 //! have no desktop: they blur a painted wallpaper instead, like Rune's `frosted-bar` example.
 
-mod grid;
+pub(crate) mod grid;
 
 pub use grid::strip_prompt;
 mod overlays;

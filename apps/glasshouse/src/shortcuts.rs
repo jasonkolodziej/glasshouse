@@ -16,6 +16,8 @@ pub enum Shortcut {
     OpenHost,
     PreviousPrompt,
     NextPrompt,
+    ScrollPageUp,
+    ScrollPageDown,
     CopyLastOutput,
     Clear,
     Find,
@@ -36,6 +38,15 @@ pub fn shortcut(ev: &KeyEvent) -> Option<Shortcut> {
 /// `shortcut` with the platform as a parameter, so both tables are tested everywhere.
 pub fn shortcut_for(ev: &KeyEvent, mac: bool) -> Option<Shortcut> {
     let m = ev.mods;
+    // Shift+Page Up/Down pages through scrollback on every platform, as in xterm, GNOME
+    // Terminal and Konsole.
+    if m.shift && !m.cmd && !m.ctrl && !m.alt {
+        match ev.key {
+            Key::PageUp => return Some(Shortcut::ScrollPageUp),
+            Key::PageDown => return Some(Shortcut::ScrollPageDown),
+            _ => {}
+        }
+    }
     if mac {
         if !m.cmd {
             return None;
@@ -117,6 +128,10 @@ pub fn label_for(shortcut: Shortcut, mac: bool) -> &'static str {
         (S::PreviousPrompt, false) => "Ctrl+Shift+↑",
         (S::NextPrompt, true) => "⌘↓",
         (S::NextPrompt, false) => "Ctrl+Shift+↓",
+        (S::ScrollPageUp, true) => "⇧PgUp",
+        (S::ScrollPageUp, false) => "Shift+PgUp",
+        (S::ScrollPageDown, true) => "⇧PgDn",
+        (S::ScrollPageDown, false) => "Shift+PgDn",
         (S::CopyLastOutput, true) => "⇧⌘A",
         (S::CopyLastOutput, false) => "Ctrl+Shift+A",
         (S::Clear, true) => "⌘K",
@@ -259,6 +274,27 @@ mod tests {
             shortcut_for(&ev(Key::Command('{'), true, true, false), true),
             Some(Shortcut::PreviousTab)
         );
+    }
+
+    #[test]
+    fn shift_page_up_should_page_through_scrollback_on_every_platform() {
+        for mac in [true, false] {
+            assert_eq!(
+                shortcut_for(&ev(Key::PageUp, true, false, false), mac),
+                Some(Shortcut::ScrollPageUp)
+            );
+            assert_eq!(
+                shortcut_for(&ev(Key::PageDown, true, false, false), mac),
+                Some(Shortcut::ScrollPageDown)
+            );
+        }
+    }
+
+    #[test]
+    fn plain_page_up_should_go_to_the_shell() {
+        let e = ev(Key::PageUp, false, false, false);
+        assert_eq!(shortcut_for(&e, true), None);
+        assert_eq!(terminal_key(&e).map(|(k, _)| k), Some(TermKey::PageUp));
     }
 
     #[test]

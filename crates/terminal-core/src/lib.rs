@@ -17,7 +17,7 @@ pub use appearance::{TerminalAppearance, TerminalCursorShape};
 pub use design_system::Rgba;
 pub use engine::{EngineError, EngineEvent, GridSize, TerminalEngine, Waker};
 pub use environment::{PtyEnvironment, PtyEnvironmentOptions};
-pub use keys::{Key, Modifiers, encode_key, encode_paste};
+pub use keys::{Key, Modifiers, encode_key, encode_mouse_wheel, encode_paste};
 pub use password::{PasswordPromptDetector, PasswordPromptState};
 pub use pty_terminal::{PtyTerminal, PtyTerminalOptions};
 pub use snapshot::{

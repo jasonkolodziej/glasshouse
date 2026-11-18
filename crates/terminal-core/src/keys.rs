@@ -123,6 +123,35 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
+/// Encodes `count` mouse-wheel notches at 0-based cell (`col`, `row`) for a program that asked
+/// for mouse reports (DECSET 1000–1003). `up` scrolls toward older content (button 4, code 64).
+///
+/// With SGR mode (DECSET 1006) each notch is `ESC [ < b ; x ; y M`; otherwise the X10 form
+/// `ESC [ M b x y`, whose single-byte coordinates can't reach past column or row 223, so a wheel
+/// there sends nothing (as in xterm).
+pub fn encode_mouse_wheel(
+    up: bool,
+    count: usize,
+    col: usize,
+    row: usize,
+    mods: Modifiers,
+    sgr: bool,
+) -> Vec<u8> {
+    let button = if up { 64u8 } else { 65 }
+        + 4 * u8::from(mods.shift)
+        + 8 * u8::from(mods.alt)
+        + 16 * u8::from(mods.control);
+    let one = if sgr {
+        format!("\x1b[<{button};{};{}M", col + 1, row + 1).into_bytes()
+    } else {
+        let (Ok(x), Ok(y)) = (u8::try_from(col + 1 + 32), u8::try_from(row + 1 + 32)) else {
+            return Vec::new();
+        };
+        vec![ESC, b'[', b'M', 32 + button, x, y]
+    };
+    one.repeat(count)
+}
+
 fn cursor_key(final_byte: u8, mods: Modifiers, app_cursor: bool) -> Vec<u8> {
     match mods.xterm_param() {
         1 if app_cursor => vec![ESC, b'O', final_byte],
@@ -163,6 +192,40 @@ fn control_code(c: char) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_wheel_should_encode_sgr_reports_one_per_notch() {
+        assert_eq!(
+            encode_mouse_wheel(true, 2, 0, 4, Modifiers::default(), true),
+            b"\x1b[<64;1;5M\x1b[<64;1;5M".to_vec()
+        );
+        assert_eq!(
+            encode_mouse_wheel(false, 1, 9, 0, Modifiers::default(), true),
+            b"\x1b[<65;10;1M".to_vec()
+        );
+    }
+
+    #[test]
+    fn mouse_wheel_should_add_modifier_bits() {
+        let mods = Modifiers {
+            shift: true,
+            control: true,
+            alt: false,
+        };
+        assert_eq!(
+            encode_mouse_wheel(true, 1, 0, 0, mods, true),
+            b"\x1b[<84;1;1M".to_vec()
+        );
+    }
+
+    #[test]
+    fn mouse_wheel_should_encode_x10_reports_and_drop_unreachable_cells() {
+        assert_eq!(
+            encode_mouse_wheel(false, 1, 2, 3, Modifiers::default(), false),
+            vec![ESC, b'[', b'M', 32 + 65, 32 + 3, 32 + 4]
+        );
+        assert!(encode_mouse_wheel(true, 1, 300, 0, Modifiers::default(), false).is_empty());
+    }
 
     const NONE: Modifiers = Modifiers {
         shift: false,
