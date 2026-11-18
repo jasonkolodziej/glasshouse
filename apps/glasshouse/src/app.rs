@@ -4,7 +4,9 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use glasshouse_security::{SecureKeyboardEntry, TouchIDSudo, TouchIDSudoStatus};
-use rune::{KeyEvent, LiveRegion, TextEdit, Tx, Waker, WheelEvent};
+use std::collections::HashMap;
+
+use rune::{Drag, KeyEvent, LiveRegion, Phase, TextEdit, Tx, Waker, WheelEvent};
 use shell_integration::CommandRecord;
 use ssh_config::{
     ManagedSshConfig, ManagedSshHost, SshConfigConflict, SshConfigStore, SshIncludeStatus,
@@ -16,6 +18,7 @@ use crate::appearance::{Accessibility, ThemeLibrary, terminal_appearance};
 use crate::hosts::{self, SshHost};
 use crate::notify;
 use crate::palette::{self, PaletteAction, PaletteHost, PaletteItem, PaletteTab};
+use crate::panes::{self, Axis, DropTarget, Edge, PaneTree};
 use crate::session::{Session, SessionNote};
 use crate::shortcuts::{self, Shortcut};
 
@@ -35,6 +38,72 @@ pub struct SystemEnv {
 pub struct CellSize {
     pub width: f32,
     pub height: f32,
+}
+
+/// How tabs share the window, as the commands name it. The arrangement itself is
+/// [`App::split`]; this is what it amounts to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Layout {
+    /// One tab at a time.
+    #[default]
+    Single,
+    /// Every tab in a row, left to right.
+    SideBySide,
+    /// Every tab in a column, top to bottom.
+    Stacked,
+    /// Arranged by dragging tabs onto panes: any mix of rows and columns, or only some tabs.
+    Custom,
+}
+
+impl Layout {
+    /// The layout after asking for `layout`: asking for the current one goes back to one tab.
+    pub fn toggled(self, layout: Layout) -> Layout {
+        if self == layout {
+            Layout::Single
+        } else {
+            layout
+        }
+    }
+
+    /// The rail button's next layout: one tab, side by side, stacked, then one tab again. An
+    /// arrangement made by dragging goes back to one tab.
+    pub fn next(self) -> Layout {
+        match self {
+            Layout::Single => Layout::SideBySide,
+            Layout::SideBySide => Layout::Stacked,
+            Layout::Stacked | Layout::Custom => Layout::Single,
+        }
+    }
+}
+
+/// A tab being dragged out of the strip: where it is and where it would land.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TabDrag {
+    pub id: u64,
+    /// The pointer, in window points.
+    pub point: [f32; 2],
+    pub target: Option<DropTarget>,
+}
+
+/// Pointer travel before a press on a tab becomes a drag, in points.
+const TAB_DRAG_THRESHOLD: f32 = 4.0;
+
+/// A divider being dragged: the split it divides and the weights it started from.
+#[derive(Clone, Debug, PartialEq)]
+struct DividerDrag {
+    path: Vec<usize>,
+    index: usize,
+    start: (f32, f32),
+}
+
+/// Where the pieces a drag aims at are on screen, in window points, from layout.
+#[derive(Clone, Debug, Default)]
+pub struct DropRects {
+    pub strip: [f32; 4],
+    pub tabs: HashMap<u64, [f32; 4]>,
+    pub panes: HashMap<u64, [f32; 4]>,
+    /// Each split's length along its axis, by path from the root, dividers included.
+    pub splits: HashMap<Vec<usize>, f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,8 +261,18 @@ pub struct App {
     pub themes: ThemeLibrary,
     pub env: SystemEnv,
     pub cell: Option<CellSize>,
-    /// The terminal area (inside the gutter), from layout.
+    /// The selected tab's terminal area (inside the gutter), from layout. With one tab on screen
+    /// every tab takes this size; split, each takes its own pane's (`Session::pane_size`).
     pub pane_size: (f32, f32),
+    /// The split tabs, arranged; `None` for one tab at a time. Always two or more tabs. It is on
+    /// screen while the selected tab is one of them; selecting another tab shows that tab alone,
+    /// and the split comes back when one of its tabs is selected again.
+    pub split: Option<PaneTree>,
+    pub tab_drag: Option<TabDrag>,
+    divider_drag: Option<DividerDrag>,
+    pub rects: DropRects,
+    /// The window layer's top-left in window points (inset in the presentation scene).
+    pub window_origin: (f32, f32),
     pub show_sidebar: bool,
     pub palette: Option<PaletteState>,
     pub find: Option<TextEdit>,
@@ -244,6 +323,11 @@ impl App {
             },
             cell: None,
             pane_size: (0.0, 0.0),
+            split: None,
+            tab_drag: None,
+            divider_drag: None,
+            rects: DropRects::default(),
+            window_origin: (0.0, 0.0),
             show_sidebar: false,
             palette: None,
             find: None,
@@ -293,6 +377,219 @@ impl App {
         self.sessions.iter().find(|s| Some(s.id) == self.selected)
     }
 
+    /// Whether panes are on screen side by side or stacked: a split layout with 2+ tabs.
+    pub fn is_split(&self) -> bool {
+        self.split
+            .as_ref()
+            .zip(self.selected)
+            .is_some_and(|(tree, id)| tree.contains(id))
+    }
+
+    /// The tabs on screen: the split's when it shows, else the selected one.
+    pub fn visible_ids(&self) -> Vec<u64> {
+        match &self.split {
+            Some(tree) if self.is_split() => tree.leaves(),
+            _ => self.selected.into_iter().collect(),
+        }
+    }
+
+    pub fn session(&self, id: u64) -> Option<&Session> {
+        self.sessions.iter().find(|s| s.id == id)
+    }
+
+    fn ids(&self) -> Vec<u64> {
+        self.sessions.iter().map(|s| s.id).collect()
+    }
+
+    /// What the arrangement amounts to: every tab in one row or column is side by side or
+    /// stacked; anything else made by dragging is custom.
+    pub fn layout(&self) -> Layout {
+        let Some(tree) = &self.split else {
+            return Layout::Single;
+        };
+        let every_tab = tree.leaves().len() == self.sessions.len();
+        match tree.flat_axis() {
+            Some(Axis::Row) if every_tab => Layout::SideBySide,
+            Some(Axis::Column) if every_tab => Layout::Stacked,
+            _ => Layout::Custom,
+        }
+    }
+
+    /// Switches to `layout`, or back to one tab if it is already on.
+    pub fn toggle_layout(&mut self, layout: Layout) {
+        self.set_layout(self.layout().toggled(layout));
+    }
+
+    /// Side by side and stacked put every tab in one row or column. A split with one tab open
+    /// opens a second one beside it, as splitting a pane does in other terminals, so the layout
+    /// change is never invisible.
+    pub fn set_layout(&mut self, layout: Layout) {
+        let axis = match layout {
+            Layout::Single => {
+                self.set_split(None);
+                return;
+            }
+            Layout::SideBySide => Axis::Row,
+            Layout::Stacked => Axis::Column,
+            Layout::Custom => return,
+        };
+        if self.sessions.len() == 1 && self.started {
+            self.new_tab();
+        }
+        self.set_split(PaneTree::flat(axis, &self.ids()));
+    }
+
+    fn set_split(&mut self, split: Option<PaneTree>) {
+        // A tree of one tab is no split.
+        self.split = split.filter(|t| t.leaves().len() > 1);
+        self.hovered_tick = None;
+        // Panes report their new sizes on the next layout; until then each tab keeps the size it
+        // had, and going back to one tab gives every tab the selected pane's size.
+        self.resize_all();
+    }
+
+    // MARK: Dragging
+
+    /// A tab in the strip is dragged: past a few points it lifts, and the drop moves it along
+    /// the strip or places it on a pane on screen. A press that never travelled stays a click.
+    pub fn drag_tab(&mut self, id: u64, d: &Drag) {
+        match d.phase {
+            Phase::Down => self.tab_drag = None,
+            Phase::Move => {
+                let lifted = self.tab_drag.is_some() || d.dx.hypot(d.dy) >= TAB_DRAG_THRESHOLD;
+                if lifted {
+                    let point = d.window_point();
+                    self.tab_drag = Some(TabDrag {
+                        id,
+                        point,
+                        target: self.drop_target(point),
+                    });
+                }
+            }
+            Phase::Up => {
+                if let Some(drag) = self.tab_drag.take()
+                    && !d.cancelled()
+                    && let Some(target) = self.drop_target(d.window_point())
+                {
+                    self.drop_tab(drag.id, target);
+                }
+            }
+        }
+    }
+
+    fn drop_target(&self, point: [f32; 2]) -> Option<DropTarget> {
+        let tabs: Vec<[f32; 4]> = self
+            .sessions
+            .iter()
+            .filter_map(|s| self.rects.tabs.get(&s.id).copied())
+            .collect();
+        let panes: Vec<(u64, [f32; 4])> = self
+            .visible_ids()
+            .into_iter()
+            .filter_map(|id| self.rects.panes.get(&id).map(|r| (id, *r)))
+            .collect();
+        let dragged = self.tab_drag.map(|d| d.id);
+        // A pane spot where letting go would change nothing is no target, so nothing lights up.
+        panes::drop_target(point, self.rects.strip, &tabs, &panes).filter(|t| match (t, dragged) {
+            (DropTarget::Pane(pane, edge), Some(id)) => self.arranged(id, *pane, *edge).is_some(),
+            _ => true,
+        })
+    }
+
+    /// The arrangement after dropping tab `id` on `pane`'s `edge`, or `None` if it would change
+    /// nothing. Onto a pane of the split, the tab moves there; onto a lone pane, the two become
+    /// a split. The lone pane's own tab, dropped on an edge, takes that side and its
+    /// neighbour in the strip the other, as dragging the one terminal on screen does in
+    /// VS Code.
+    pub fn arranged(&self, id: u64, pane: u64, edge: Edge) -> Option<PaneTree> {
+        if pane == id {
+            if self.is_split() || edge == Edge::Center {
+                return None;
+            }
+            let i = self.sessions.iter().position(|s| s.id == id)?;
+            let partner = self
+                .sessions
+                .get(i + 1)
+                .or_else(|| i.checked_sub(1).and_then(|j| self.sessions.get(j)))?
+                .id;
+            let mut tree = PaneTree::Leaf(partner);
+            return tree.place(partner, id, edge).then_some(tree);
+        }
+        let mut tree = match self.split.clone() {
+            Some(tree) if tree.contains(pane) && self.is_split() => tree,
+            // The pane on screen is a tab outside the split: it starts a new one.
+            _ => PaneTree::Leaf(pane),
+        };
+        tree.place(pane, id, edge).then_some(tree)
+    }
+
+    /// Drops tab `id` on `target` (see [`App::arranged`]). The dropped tab takes the keyboard.
+    pub fn drop_tab(&mut self, id: u64, target: DropTarget) {
+        match target {
+            DropTarget::Strip(index) => self.move_tab(id, index),
+            DropTarget::Pane(pane, edge) => {
+                if let Some(tree) = self.arranged(id, pane, edge) {
+                    self.set_split(Some(tree));
+                    self.select(id);
+                }
+            }
+        }
+    }
+
+    /// Moves tab `id` to before the tab now at `index` (the end for `len`). A flat split
+    /// follows the strip's order.
+    pub fn move_tab(&mut self, id: u64, index: usize) {
+        let Some(from) = self.sessions.iter().position(|s| s.id == id) else {
+            return;
+        };
+        let to = if index > from { index - 1 } else { index };
+        let session = self.sessions.remove(from);
+        self.sessions.insert(to.min(self.sessions.len()), session);
+        let order = self.ids();
+        if let Some(tree) = &mut self.split {
+            tree.follow_order(&order);
+        }
+    }
+
+    /// The divider between children `index` and `index + 1` of the split at `path` is dragged:
+    /// the two panes trade space and the rest keep theirs.
+    pub fn drag_divider(&mut self, path: &[usize], index: usize, d: &Drag) {
+        let Some(tree) = &mut self.split else { return };
+        if d.phase == Phase::Down {
+            self.divider_drag = match tree.node(path) {
+                Some(PaneTree::Split { children, .. }) if index + 1 < children.len() => {
+                    Some(DividerDrag {
+                        path: path.to_vec(),
+                        index,
+                        start: (children[index].1, children[index + 1].1),
+                    })
+                }
+                _ => None,
+            };
+            return;
+        }
+        let Some(drag) = self.divider_drag.clone() else {
+            return;
+        };
+        let Some(PaneTree::Split { axis, children }) = tree.node_mut(&drag.path) else {
+            return;
+        };
+        let total: f32 = children.iter().map(|(_, w)| w).sum();
+        let dividers = DIVIDER * children.len().saturating_sub(1) as f32;
+        let length = self.rects.splits.get(&drag.path).copied().unwrap_or(0.0) - dividers;
+        let delta = if *axis == Axis::Row { d.dx } else { d.dy };
+        let (a, b) = if d.phase == Phase::Up && d.cancelled() {
+            drag.start
+        } else {
+            panes::drag_weights(drag.start, total, length, delta)
+        };
+        children[drag.index].1 = a;
+        children[drag.index + 1].1 = b;
+        if d.phase == Phase::Up {
+            self.divider_drag = None;
+        }
+    }
+
     fn selected_index(&self) -> Option<usize> {
         self.sessions
             .iter()
@@ -326,6 +623,12 @@ impl App {
     fn add(&mut self, session: Session) {
         if let Some(size) = self.grid_size() {
             session.resize(size);
+        }
+        // Opened from a split pane, the tab joins the split beside it.
+        if self.is_split()
+            && let (Some(tree), Some(focused)) = (&mut self.split, self.selected)
+        {
+            tree.add_beside(focused, session.id);
         }
         self.selected = Some(session.id);
         self.sessions.push(session);
@@ -383,6 +686,8 @@ impl App {
         };
         let session = self.sessions.remove(index);
         session.close();
+        let split = self.split.take().and_then(|t| t.without(id));
+        self.set_split(split);
         if self.selected == Some(id) {
             self.selected = neighbour_after_close(
                 &self.sessions.iter().map(|s| s.id).collect::<Vec<_>>(),
@@ -406,17 +711,33 @@ impl App {
             return;
         };
         let next = (i as isize + delta).rem_euclid(n as isize) as usize;
-        self.selected = Some(self.sessions[next].id);
+        self.select(self.sessions[next].id);
     }
 
     // MARK: Layout
 
+    /// The selected tab's grid size (or, with no tab, a new tab's).
     pub fn grid_size(&self) -> Option<GridSize> {
+        match self.selected() {
+            Some(session) => self.grid_size_for(session),
+            None => self.grid_size_in(self.pane_size, &self.current_appearance()),
+        }
+    }
+
+    /// The grid that fits `session`'s pane: its own when split (once measured), else the
+    /// selected pane's, which every tab shares while one tab is on screen.
+    pub fn grid_size_for(&self, session: &Session) -> Option<GridSize> {
+        let own = session.pane_size;
+        let pane = if self.is_split() && own.0 > 0.0 && own.1 > 0.0 {
+            own
+        } else {
+            self.pane_size
+        };
+        self.grid_size_in(pane, &session.appearance)
+    }
+
+    fn grid_size_in(&self, (w, h): (f32, f32), a: &TerminalAppearance) -> Option<GridSize> {
         let cell = self.cell?;
-        let a = self
-            .selected()
-            .map_or_else(|| self.current_appearance(), |s| s.appearance.clone());
-        let (w, h) = self.pane_size;
         let cols = ((w - 2.0 * a.padding_horizontal) / cell.width).floor();
         let rows = ((h - 2.0 * a.padding_vertical) / cell.height).floor();
         (cols >= 2.0 && rows >= 1.0).then(|| GridSize::new(cols as u16, rows as u16))
@@ -429,16 +750,23 @@ impl App {
         }
     }
 
-    pub fn set_pane_size(&mut self, w: f32, h: f32) {
-        if (w, h) != self.pane_size {
-            self.pane_size = (w, h);
-            self.resize_all();
+    /// Tab `id`'s pane measured `w` × `h` points of terminal area.
+    ///
+    /// Every tab is fitted again, not only on a change: a pane back on screen at its old size
+    /// may hold a grid resized for one tab at a time meanwhile.
+    pub fn set_pane_size(&mut self, id: u64, w: f32, h: f32) {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+            session.pane_size = (w, h);
         }
+        if Some(id) == self.selected {
+            self.pane_size = (w, h);
+        }
+        self.resize_all();
     }
 
     fn resize_all(&self) {
-        if let Some(size) = self.grid_size() {
-            for session in &self.sessions {
+        for session in &self.sessions {
+            if let Some(size) = self.grid_size_for(session) {
                 session.resize(size);
             }
         }
@@ -474,10 +802,10 @@ impl App {
         }
 
         let mut exited = Vec::new();
-        let selected = self.selected;
+        let on_screen = self.visible_ids();
         let mut notes = Vec::new();
         for session in &mut self.sessions {
-            let visible = Some(session.id) == selected;
+            let visible = on_screen.contains(&session.id);
             let (session_changed, session_notes) = session.drain(visible);
             changed |= session_changed;
             notes.extend(session_notes.into_iter().map(|n| (session.id, n)));
@@ -517,7 +845,7 @@ impl App {
                 let long = record
                     .duration()
                     .is_some_and(|d| d >= session.timeline.notify_after);
-                if long && Some(id) != self.selected {
+                if long && !self.visible_ids().contains(&id) {
                     let (title, body) = notify::command_finished_text(&session.title, &record);
                     notify::post(&title, &body);
                 }
@@ -631,13 +959,14 @@ impl App {
         }
     }
 
-    /// A wheel or trackpad scroll over the grid area, at (`x`, `y`) in its own points: whole
-    /// lines go to the selected tab (scrollback, or the program on the alternate screen).
-    pub fn on_wheel(&mut self, ev: WheelEvent) -> bool {
+    /// A wheel or trackpad scroll over tab `id`'s grid area, at (`x`, `y`) in its own points:
+    /// whole lines go to that tab (scrollback, or the program on the alternate screen), focused
+    /// or not, as in other terminals' split panes.
+    pub fn on_wheel(&mut self, id: u64, ev: WheelEvent) -> bool {
         if ev.dy == 0.0 {
             return false;
         }
-        let Some(index) = self.selected_index() else {
+        let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
             return false;
         };
         let cell = self
@@ -715,6 +1044,8 @@ impl App {
             }
             Shortcut::NextTab => self.select_offset(1),
             Shortcut::PreviousTab => self.select_offset(-1),
+            Shortcut::SplitSideBySide => self.toggle_layout(Layout::SideBySide),
+            Shortcut::SplitStacked => self.toggle_layout(Layout::Stacked),
         }
     }
 
@@ -771,7 +1102,10 @@ impl App {
         let recent = self.recent_commands();
         let recent: Vec<&str> = recent.iter().map(String::as_str).collect();
         let query = self.palette.as_ref().map_or("", |p| p.edit.text.as_str());
-        palette::rank(palette::all_items(&hosts, &tabs, &recent), query)
+        palette::rank(
+            palette::all_items(self.layout(), &hosts, &tabs, &recent),
+            query,
+        )
     }
 
     /// Most recent first, across every tab.
@@ -816,6 +1150,7 @@ impl App {
             PaletteAction::ManageSshKeys => self.open_settings(SettingsPane::Ssh),
             PaletteAction::OpenHost(alias) => self.open_host(&alias),
             PaletteAction::SelectTab(id) => self.select(id),
+            PaletteAction::SetLayout(layout) => self.set_layout(layout),
             PaletteAction::InsertCommand(command) => {
                 if let Some(s) = self.selected() {
                     s.send_text(&command);
@@ -945,7 +1280,9 @@ impl App {
     }
 }
 
-/// After removing index `removed`, the tab to select: the right-hand neighbour, else the left one.
+/// A divider between split panes, in points along the split.
+pub const DIVIDER: f32 = 5.0;
+
 /// Points Rune reports for one notch of a mouse wheel (its `LINE_POINTS`): winit's line delta
 /// scaled, larger on Linux.
 const WHEEL_NOTCH_POINTS: f32 = if cfg!(target_os = "linux") {
@@ -977,6 +1314,7 @@ fn cell_index(offset: f32, cell: f32, count: u16) -> usize {
     ((offset / cell) as usize).min(last)
 }
 
+/// After removing index `removed`, the tab to select: the right-hand neighbour, else the left one.
 pub fn neighbour_after_close(remaining: &[u64], removed: usize) -> Option<u64> {
     if remaining.is_empty() {
         return None;
@@ -1049,6 +1387,33 @@ mod tests {
         let mut draft = HostDraft::new("k".into());
         draft.port = TextEdit::new("abc");
         assert_eq!(draft.host().port, Some(-1));
+    }
+
+    #[test]
+    fn asking_for_the_current_layout_should_go_back_to_one_tab() {
+        assert_eq!(
+            Layout::Single.toggled(Layout::SideBySide),
+            Layout::SideBySide
+        );
+        assert_eq!(Layout::SideBySide.toggled(Layout::Stacked), Layout::Stacked);
+        assert_eq!(Layout::Stacked.toggled(Layout::Stacked), Layout::Single);
+    }
+
+    #[test]
+    fn the_rail_button_should_cycle_through_every_layout() {
+        let cycle: Vec<Layout> = std::iter::successors(Some(Layout::Single), |l| Some(l.next()))
+            .take(4)
+            .collect();
+        assert_eq!(
+            cycle,
+            [
+                Layout::Single,
+                Layout::SideBySide,
+                Layout::Stacked,
+                Layout::Single
+            ]
+        );
+        assert_eq!(Layout::Custom.next(), Layout::Single);
     }
 
     #[test]

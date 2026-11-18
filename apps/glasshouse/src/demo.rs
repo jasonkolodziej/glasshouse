@@ -7,10 +7,12 @@ use ssh_config::{ManagedSshConfig, ManagedSshHost, SshIncludeStatus, SshKeyFile}
 use terminal_core::GridSize;
 
 use crate::app::{
-    App, HostDraft, PaletteState, SettingsPane, SettingsState, SshSettings, SystemEnv,
+    App, HostDraft, Layout, PaletteState, SettingsPane, SettingsState, SshSettings, SystemEnv,
+    TabDrag,
 };
 use crate::appearance::ThemeLibrary;
 use crate::hosts::{Credential, SshHost};
+use crate::panes::{DropTarget, Edge, PaneTree};
 use crate::session::{ApprovalContext, ApprovalPhase, ApprovalSource, Session};
 
 pub type Scene = (&'static str, fn(&mut App));
@@ -27,6 +29,10 @@ pub const SCENES: &[Scene] = &[
     ("light", light),
     ("solid", solid),
     ("hero", hero),
+    ("split", split),
+    ("stacked", stacked),
+    ("arranged", arranged),
+    ("dragging", dragging),
 ];
 
 const GRID: GridSize = GridSize {
@@ -320,6 +326,39 @@ fn solid(app: &mut App) {
     for session in &mut app.sessions {
         session.apply_appearance(appearance.clone(), generation);
     }
+}
+
+/// Every tab in its own pane, left to right.
+fn split(app: &mut App) {
+    terminal(app);
+    app.set_layout(Layout::SideBySide);
+}
+
+/// Every tab in its own pane, top to bottom.
+fn stacked(app: &mut App) {
+    terminal(app);
+    app.set_layout(Layout::Stacked);
+}
+
+/// Tabs arranged by dragging: the first on the left, the other two stacked on the right.
+fn arranged(app: &mut App) {
+    terminal(app);
+    let [first, server, notes] = [0, 1, 2].map(|i| app.sessions[i].id);
+    let mut tree = PaneTree::Leaf(first);
+    tree.place(first, server, Edge::Right);
+    tree.place(server, notes, Edge::Bottom);
+    app.split = Some(tree);
+}
+
+/// A tab held over the right half of the pane on screen: the drop would split them.
+fn dragging(app: &mut App) {
+    terminal(app);
+    let [first, server] = [0, 1].map(|i| app.sessions[i].id);
+    app.tab_drag = Some(TabDrag {
+        id: server,
+        point: [820.0, 360.0],
+        target: Some(DropTarget::Pane(first, Edge::Right)),
+    });
 }
 
 /// The README's picture: the glass window floating on the wallpaper, sidebar open.

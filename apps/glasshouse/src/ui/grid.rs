@@ -14,7 +14,10 @@ use terminal_core::{CellFlags, GridLine, TerminalAppearance, TerminalCursorShape
 use design_system::TrustState;
 
 use super::{Ink, UI, color, overlays, style};
-use crate::app::{App, CellSize};
+use rune::{Cursor, Drag};
+
+use crate::app::{App, CellSize, DIVIDER};
+use crate::panes::{Axis, DropTarget, Edge, PaneTree};
 use crate::session::Session;
 use crate::shortcuts::{self, Shortcut};
 
@@ -62,33 +65,170 @@ pub fn cell_probe(app: &App) -> El {
         })
 }
 
-pub fn pane(app: &App, ink: &Ink) -> El {
-    let Some(session) = app.selected() else {
+/// The terminal area: the selected tab's pane, or the split's panes, arranged as its tree.
+pub fn panes(app: &App, ink: &Ink) -> El {
+    let Some(selected) = app.selected() else {
         return empty(ink);
     };
+    match &app.split {
+        Some(tree) if app.is_split() => node(app, tree, &[], ink)
+            .key("split")
+            .grow(1.0)
+            .min_w(0.0)
+            .min_h(0.0)
+            .h_full(),
+        _ => pane(app, selected, true, ink).h_full(),
+    }
+}
+
+/// A pane, or a split's children in a row or column with a divider between each pair, each
+/// taking its weight's share of the length.
+fn node(app: &App, tree: &PaneTree, path: &[usize], ink: &Ink) -> El {
+    let PaneTree::Split { axis, children } = tree else {
+        let PaneTree::Leaf(id) = tree else {
+            return el();
+        };
+        return match app.session(*id) {
+            Some(session) => pane(app, session, Some(*id) == app.selected, ink),
+            None => el(),
+        };
+    };
+    let row_axis = *axis == Axis::Row;
+    let own = path.to_vec();
+    let mut split = if row_axis { row() } else { col() }
+        .key(format!("split-{}", path_key(path)))
+        .role("group")
+        .label(if row_axis {
+            "Tabs side by side"
+        } else {
+            "Tabs stacked"
+        })
+        .on_layout(move |s: &mut App, r: [f32; 4]| {
+            s.rects
+                .splits
+                .insert(own.clone(), if row_axis { r[2] } else { r[3] });
+        });
+    for (i, (child, weight)) in children.iter().enumerate() {
+        if i > 0 {
+            split = split.child(divider(path, i - 1, row_axis, ink));
+        }
+        let mut child_path = path.to_vec();
+        child_path.push(i);
+        let child = node(app, child, &child_path, ink)
+            .grow(*weight)
+            .min_w(0.0)
+            .min_h(0.0);
+        split = split.child(if row_axis {
+            child.h_full()
+        } else {
+            child.w_full()
+        });
+    }
+    split
+}
+
+/// A split's place in the tree for element keys: `root`, `root-1`, `root-1-0`, …
+fn path_key(path: &[usize]) -> String {
+    std::iter::once("root".to_owned())
+        .chain(path.iter().map(usize::to_string))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// A rule between two panes that resizes them when dragged.
+fn divider(path: &[usize], index: usize, row_axis: bool, ink: &Ink) -> El {
+    let path = path.to_vec();
+    let line = if row_axis {
+        el().w(1.0).h_full()
+    } else {
+        el().h(1.0).w_full()
+    };
+    let hit = if row_axis {
+        row().w(DIVIDER).h_full()
+    } else {
+        col().h(DIVIDER).w_full()
+    };
+    hit.key(format!("divider-{}-{index}", path_key(&path)))
+        .role("separator")
+        .label("Resize panes")
+        .center()
+        // The panes' own ground, so glass doesn't show the wallpaper through the gap.
+        .fill(ink.surface(ink.bg))
+        .hit()
+        .hover(ink.hover)
+        .cursor(if row_axis {
+            Cursor::ResizeColumn
+        } else {
+            Cursor::ResizeRow
+        })
+        .on_drag(move |s: &mut App, d: &mut Drag, _| s.drag_divider(&path, index, d))
+        .child(line.fill(ink.hairline))
+}
+
+/// Where a dragged tab would land on this pane: the half it would take, or, in the middle, the
+/// whole pane it would swap with.
+fn drop_marker(app: &App, id: u64, ink: &Ink) -> Option<El> {
+    let Some(DropTarget::Pane(target, edge)) = app.tab_drag.and_then(|d| d.target) else {
+        return None;
+    };
+    let rect = app.rects.panes.get(&id)?;
+    // The target is set only where a drop would change something (`App::drop_target`).
+    if target != id {
+        return None;
+    }
+    let (w, h) = (rect[2], rect[3]);
+    let (x, y, mw, mh) = match edge {
+        Edge::Left => (0.0, 0.0, w / 2.0, h),
+        Edge::Right => (w / 2.0, 0.0, w / 2.0, h),
+        Edge::Top => (0.0, 0.0, w, h / 2.0),
+        Edge::Bottom => (0.0, h / 2.0, w, h / 2.0),
+        Edge::Center => (0.0, 0.0, w, h),
+    };
+    Some(
+        el().key("drop-marker")
+            .absolute(x, y)
+            .size(mw, mh)
+            .fill(ink.accent.alpha(0.16))
+            .border(2.0, ink.accent),
+    )
+}
+
+/// One tab's pane: header, grid and gutter, status line. `focused` is the pane that takes the
+/// keyboard; split, it carries an accent bar and the others draw a hollow cursor.
+fn pane(app: &App, session: &Session, focused: bool, ink: &Ink) -> El {
     let a = &session.appearance;
     let cell = app.cell.unwrap_or_else(|| measure_cell(a));
+    let id = session.id;
+    let split = app.is_split();
 
-    let area = el()
+    let mut area = el()
         .key("grid-area")
         .grow(1.0)
         .min_w(0.0)
         .h_full()
         // A grid wider than the pane (before a resize lands) must not draw over the gutter.
         .clip_rounded(0.0)
-        .on_layout(|s: &mut App, r: [f32; 4]| s.set_pane_size(r[2], r[3]))
+        .on_layout(move |s: &mut App, r: [f32; 4]| s.set_pane_size(id, r[2], r[3]))
         // Scrollback, or the program's own scrolling on the alternate screen.
-        .on_wheel(|s: &mut App, ev: WheelEvent, _| s.on_wheel(ev))
-        .child(screen(app, session, cell, ink));
+        .on_wheel(move |s: &mut App, ev: WheelEvent, _| s.on_wheel(id, ev))
+        .child(screen(app, session, cell, focused, ink));
+    if split {
+        // Clicking a pane gives it the keyboard.
+        area = area.hit().on_press(move |s: &mut App| s.select(id));
+    }
 
     let mut pane = col()
-        .key(format!("pane-{}", session.id))
+        .key(format!("pane-{id}"))
         .role("group")
         .label(session.title.clone())
         .grow(1.0)
         .min_w(0.0)
-        .h_full()
-        .child(header(session, ink))
+        .min_h(0.0)
+        // Where a dragged tab can land.
+        .on_layout(move |s: &mut App, r: [f32; 4]| {
+            s.rects.panes.insert(id, r);
+        })
+        .child(header(session, focused, ink))
         .child(super::hrule(ink))
         .child(
             row()
@@ -96,7 +236,7 @@ pub fn pane(app: &App, ink: &Ink) -> El {
                 .grow(1.0)
                 .min_h(0.0)
                 .child(area)
-                .child(gutter(session, ink, pane_height(app))),
+                .child(gutter(session, ink, pane_height(app, session))),
         )
         .child(status_line(app, session, ink));
     if ink.glass {
@@ -124,7 +264,19 @@ pub fn pane(app: &App, ink: &Ink) -> El {
             Some(STATUS_HEIGHT + 18.0),
         ));
     }
-    if app.find.is_some() {
+    if split && focused {
+        // Over the header's top edge, like the active tab's bar, so it takes no row from the grid.
+        pane = pane.child(
+            el().key("pane-focus")
+                .pin(Some(0.0), Some(0.0), Some(0.0), None)
+                .h(2.0)
+                .fill(ink.accent),
+        );
+    }
+    if let Some(marker) = drop_marker(app, id, ink) {
+        pane = pane.child(marker);
+    }
+    if app.find.is_some() && focused {
         pane = pane.child(overlays::find_bar(app, ink).pin(
             None,
             Some(HEADER_HEIGHT + 10.0),
@@ -180,7 +332,7 @@ pub struct PaneCommand<'a> {
 
 /// `⠿   command   duration`: the command the tab is running or last ran, or, scrolled back, the
 /// one whose output is in view. Pressing it scrolls to that command's prompt.
-fn header(session: &Session, ink: &Ink) -> El {
+fn header(session: &Session, focused: bool, ink: &Ink) -> El {
     let engine = session.engine();
     let top = engine.top_visible_row();
     let at_bottom = engine.snapshot().display_offset == 0;
@@ -209,7 +361,9 @@ fn header(session: &Session, ink: &Ink) -> El {
         .child(
             text(title.clone())
                 .font(style(UI, 650.0))
-                .color(if running || pinned {
+                .color(if !focused {
+                    ink.tertiary
+                } else if running || pinned {
                     ink.text
                 } else {
                     ink.secondary
@@ -219,6 +373,7 @@ fn header(session: &Session, ink: &Ink) -> El {
         )
         .child(el().grow(1.0))
         .children(duration.map(|d| text(d).font(style(UI, 500.0)).color(ink.tertiary)));
+    let id = session.id;
     if let Some(p) = picked {
         let record = p.record.clone();
         let help = format!("Scroll to the start of {title}");
@@ -228,7 +383,8 @@ fn header(session: &Session, ink: &Ink) -> El {
             .help(help)
             .hit()
             .on_press(move |s: &mut App| {
-                if let Some(session) = s.selected() {
+                s.select(id);
+                if let Some(session) = s.session(id) {
                     session.jump_to(&record);
                 }
             });
@@ -352,8 +508,10 @@ fn status_line(app: &App, session: &Session, ink: &Ink) -> El {
 }
 
 /// The pane's grid height from layout, or from the window before the first layout.
-fn pane_height(app: &App) -> f32 {
-    if app.pane_size.1 > 0.0 {
+fn pane_height(app: &App, session: &Session) -> f32 {
+    if app.is_split() && session.pane_size.1 > 0.0 {
+        session.pane_size.1
+    } else if app.pane_size.1 > 0.0 {
         app.pane_size.1
     } else {
         let window = if app.window.1 > 0.0 {
@@ -401,14 +559,16 @@ fn banner(message: &str, ink: &Ink) -> El {
     )
 }
 
-/// The visible rows as one `grid`, with the cursor over it.
-fn screen(app: &App, session: &Session, cell: CellSize, ink: &Ink) -> El {
+/// The visible rows as one `grid`, with the cursor over it. An unfocused pane's cursor is a
+/// hollow block that doesn't blink, and only the focused pane shows find matches.
+fn screen(app: &App, session: &Session, cell: CellSize, focused: bool, ink: &Ink) -> El {
     let a = &session.appearance;
     let snap = session.engine().snapshot();
     let style = grid_style(a);
     let find = app
         .find
         .as_ref()
+        .filter(|_| focused)
         .map(|f| f.text.to_lowercase())
         .filter(|q| !q.is_empty());
     let highlight = ink.orange.alpha(0.42);
@@ -439,6 +599,17 @@ fn screen(app: &App, session: &Session, cell: CellSize, ink: &Ink) -> El {
     }
     let mut layer = el().w_full().h_full().child(screen);
     if let Some(r) = cursor_row
+        && cursor.visible
+        && !focused
+    {
+        let x = pad_x + cursor.col as f32 * cell.width;
+        let y = pad_y + r as f32 * cell.height;
+        let hollow = el()
+            .absolute(x, y)
+            .size(cell.width, cell.height)
+            .border(1.0, color(cursor.color));
+        layer = layer.child(hollow.key("cursor"));
+    } else if let Some(r) = cursor_row
         && cursor.visible
         && (app.blink_on || !cursor.blinking)
     {
@@ -589,6 +760,7 @@ fn grid_row(line: &GridLine, style: TextStyle, find: Option<&str>, highlight: Co
 /// Command marks in a reserved strip right of the grid. Shape and colour both encode status
 /// (never colour alone): ● success, ■ failure, ○ running.
 fn gutter(session: &Session, ink: &Ink, height: f32) -> El {
+    let id = session.id;
     let total = session.engine().total_rows().max(1) as f32;
     let ticks = session.timeline.commands().iter().map(|r| {
         let hit = gh::size::GUTTER_HIT_HEIGHT;
@@ -618,7 +790,8 @@ fn gutter(session: &Session, ink: &Ink, height: f32) -> El {
             .h(gh::size::GUTTER_HIT_HEIGHT)
             .center()
             .on_press(move |s: &mut App| {
-                if let Some(session) = s.selected() {
+                s.select(id);
+                if let Some(session) = s.session(id) {
                     session.jump_to(&record);
                 }
             })

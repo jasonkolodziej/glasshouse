@@ -1,6 +1,7 @@
 //! Command palette items and ranking (⇧⌘P / ⇧⌘O): one field, mixed results, a "top result" that
 //! wins regardless of category, and the shortcut shown on every row so users learn it.
 
+use crate::app::Layout;
 use crate::shortcuts::{Shortcut, label};
 
 /// What choosing a palette row does. Kept as data so the list can be built and ranked without UI.
@@ -13,6 +14,7 @@ pub enum PaletteAction {
     ManageSshKeys,
     OpenHost(String),
     SelectTab(u64),
+    SetLayout(Layout),
     InsertCommand(String),
 }
 
@@ -70,8 +72,10 @@ pub struct PaletteTab<'a> {
     pub cwd: Option<&'a str>,
 }
 
-/// Every item, in the Swift app's order: actions, hosts, tabs, then up to 20 distinct recent commands.
+/// Every item, in the Swift app's order: actions, hosts, tabs, then up to 20 distinct recent
+/// commands. Layout actions follow the Swift app's actions, offering only what changes `layout`.
 pub fn all_items(
+    layout: Layout,
     hosts: &[PaletteHost<'_>],
     tabs: &[PaletteTab<'_>],
     recent: &[&str],
@@ -108,6 +112,39 @@ pub fn all_items(
         )
         .subtitle("Secure Enclave keys that ask for Touch ID"),
     ];
+    // After the fixed actions, so the rows above keep their places.
+    let layouts = [
+        (
+            Layout::SideBySide,
+            "Split Tabs Side by Side",
+            "◫",
+            Shortcut::SplitSideBySide,
+        ),
+        (
+            Layout::Stacked,
+            "Split Tabs Stacked",
+            "⊟",
+            Shortcut::SplitStacked,
+        ),
+    ];
+    items.extend(layouts.into_iter().filter(|(l, ..)| *l != layout).map(
+        |(l, title, icon, shortcut)| {
+            PaletteItem::new(title, icon, "Layout", PaletteAction::SetLayout(l))
+                .subtitle("Every open tab in its own pane")
+                .shortcut(label(shortcut))
+        },
+    ));
+    if layout != Layout::Single {
+        items.push(
+            PaletteItem::new(
+                "Unsplit Tabs",
+                "▢",
+                "Layout",
+                PaletteAction::SetLayout(Layout::Single),
+            )
+            .subtitle("Back to one tab at a time"),
+        );
+    }
     items.extend(hosts.iter().map(|h| {
         let subtitle = [h.user, h.host_name]
             .into_iter()
@@ -185,6 +222,7 @@ mod tests {
     #[test]
     fn rank_should_order_prefix_before_contains_before_subtitle() {
         let items = all_items(
+            Layout::Single,
             &[PaletteHost {
                 alias: "tabby",
                 user: None,
@@ -199,12 +237,21 @@ mod tests {
             &[],
         );
         let ranked = rank(items, "tab");
-        assert_eq!(titles(&ranked), ["tabby", "New Tab", "build"]);
+        assert_eq!(
+            titles(&ranked),
+            [
+                "tabby",
+                "New Tab",
+                "Split Tabs Side by Side",
+                "Split Tabs Stacked",
+                "build"
+            ]
+        );
     }
 
     #[test]
     fn rank_should_keep_everything_for_an_empty_query() {
-        let items = all_items(&[], &[], &[]);
+        let items = all_items(Layout::Single, &[], &[], &[]);
         assert_eq!(rank(items.clone(), ""), items);
     }
 
@@ -215,16 +262,38 @@ mod tests {
             .chain(["cmd0".into()])
             .collect();
         let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-        let recents = all_items(&[], &[], &refs)
+        let recents = all_items(Layout::Single, &[], &[], &refs)
             .into_iter()
             .filter(|i| i.kind == "Recent")
             .count();
         assert_eq!(recents, 20);
     }
 
+    fn layout_actions(layout: Layout) -> Vec<PaletteAction> {
+        all_items(layout, &[], &[], &[])
+            .into_iter()
+            .filter(|i| i.kind == "Layout")
+            .map(|i| i.action)
+            .collect()
+    }
+
+    #[test]
+    fn layout_actions_should_offer_the_layouts_not_already_on() {
+        use PaletteAction::SetLayout;
+        assert_eq!(
+            layout_actions(Layout::Single),
+            [SetLayout(Layout::SideBySide), SetLayout(Layout::Stacked)]
+        );
+        assert_eq!(
+            layout_actions(Layout::SideBySide),
+            [SetLayout(Layout::Stacked), SetLayout(Layout::Single)]
+        );
+    }
+
     #[test]
     fn host_subtitle_should_join_user_and_host_name() {
         let items = all_items(
+            Layout::Single,
             &[PaletteHost {
                 alias: "a",
                 user: Some("me"),
@@ -234,6 +303,7 @@ mod tests {
             &[],
             &[],
         );
-        assert_eq!(items[5].subtitle.as_deref(), Some("me@h"));
+        let host = items.iter().find(|i| i.title == "a").expect("the host row");
+        assert_eq!(host.subtitle.as_deref(), Some("me@h"));
     }
 }
