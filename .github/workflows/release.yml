@@ -105,12 +105,19 @@ jobs:
         working-directory: dist
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
-      - name: Create the GitHub release
+      # A release made on GitHub's web form creates the tag, which starts this run, so the release
+      # can exist before the builds finish. Then add the files to it and keep its title and notes.
+      - name: Create the GitHub release, or add the files to an existing one
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Glasshouse $GITHUB_REF_NAME" \
-            --generate-notes \
-            $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists: uploading the files to it."
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Glasshouse $GITHUB_REF_NAME" \
+              --generate-notes \
+              $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)
+          fi
