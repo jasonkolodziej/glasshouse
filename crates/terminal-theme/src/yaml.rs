@@ -433,7 +433,9 @@ pub(crate) fn encode_config(config: &AppearanceConfig) -> String {
         Entry::Value("contrast", config.contrast.as_str().into()),
     ];
     // Glasshouse's own key, after the ones Swift writes; omitted at the default.
-    if let Some(size) = config.rail_icon_size {
+    if let Some(size) = config.rail_icon_size
+        && size != AppearanceConfig::DEFAULT_RAIL_ICON_SIZE
+    {
         entries.push(Entry::Value("rail-icon-size", plain_number(size)));
     }
     render(&entries)
