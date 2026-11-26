@@ -25,6 +25,7 @@ pub enum Shortcut {
     Settings,
     Copy,
     Paste,
+    SelectAll,
     SelectTab(usize),
     NextTab,
     PreviousTab,
@@ -71,6 +72,7 @@ pub fn shortcut_for(ev: &KeyEvent, mac: bool) -> Option<Shortcut> {
             (Key::Command(','), false) => Some(Shortcut::Settings),
             (Key::Command('c'), false) => Some(Shortcut::Copy),
             (Key::Command('v'), false) => Some(Shortcut::Paste),
+            (Key::Command('a'), false) => Some(Shortcut::SelectAll),
             // As in iTerm: ⌘D splits side by side, ⇧⌘D stacked.
             (Key::Command('d' | 'D'), false) => Some(Shortcut::SplitSideBySide),
             (Key::Command('d' | 'D'), true) => Some(Shortcut::SplitStacked),
@@ -96,6 +98,8 @@ pub fn shortcut_for(ev: &KeyEvent, mac: bool) -> Option<Shortcut> {
         (Key::Command('q'), true) => Some(Shortcut::CloseWindow),
         (Key::Command('p'), true) => Some(Shortcut::CommandPalette),
         (Key::Command('o'), true) => Some(Shortcut::OpenHost),
+        // Ctrl+Shift+A copies the last output, so Select All takes Alt as well.
+        (Key::Command('a' | 'A'), true) if m.alt => Some(Shortcut::SelectAll),
         (Key::Command('a'), true) => Some(Shortcut::CopyLastOutput),
         (Key::Command('k'), true) => Some(Shortcut::Clear),
         (Key::Command('f'), true) => Some(Shortcut::Find),
@@ -156,6 +160,8 @@ pub fn label_for(shortcut: Shortcut, mac: bool) -> &'static str {
         (S::Copy, false) => "Ctrl+Shift+C",
         (S::Paste, true) => "⌘V",
         (S::Paste, false) => "Ctrl+Shift+V",
+        (S::SelectAll, true) => "⌘A",
+        (S::SelectAll, false) => "Alt+Ctrl+Shift+A",
         (S::NextTab, true) => "⇧⌘]",
         (S::NextTab, false) => "Ctrl+Tab",
         (S::PreviousTab, true) => "⇧⌘[",
@@ -178,6 +184,22 @@ pub fn terminal_key(ev: &KeyEvent) -> Option<(TermKey, Modifiers)> {
         control: m.ctrl,
         alt: m.alt,
     };
+    // ⌘ without Control only happens on macOS (elsewhere `cmd` is Control itself). As in
+    // Terminal.app, ⌘← and ⌘→ go to the start and end of the line and ⌘⌫ deletes back to its
+    // start: Ctrl+A, Ctrl+E and Ctrl+U, which zsh, bash and fish all bind so.
+    if m.cmd && !m.ctrl {
+        let control = match ev.key {
+            Key::Left => 'a',
+            Key::Right => 'e',
+            Key::Backspace => 'u',
+            _ => return None,
+        };
+        let mods = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        return Some((TermKey::Text(control.to_string()), mods));
+    }
     let key = match &ev.key {
         Key::Text(t) => TermKey::Text(t.clone()),
         // Off macOS, Ctrl+letter arrives as a command chord; to the shell it is a control character.
@@ -269,6 +291,56 @@ mod tests {
             shortcut_for(&ev(Key::Up, true, true, true), false),
             Some(Shortcut::PreviousPrompt)
         );
+    }
+
+    #[test]
+    fn select_all_should_not_take_copy_last_output_s_chord() {
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('a'), false, true, false), true),
+            Some(Shortcut::SelectAll)
+        );
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('a'), true, true, false), true),
+            Some(Shortcut::CopyLastOutput)
+        );
+        let mut alt = ev(Key::Command('a'), true, true, true);
+        alt.mods.alt = true;
+        assert_eq!(shortcut_for(&alt, false), Some(Shortcut::SelectAll));
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('a'), true, true, true), false),
+            Some(Shortcut::CopyLastOutput)
+        );
+        // Ctrl+A stays the shell's line start off macOS.
+        assert_eq!(
+            shortcut_for(&ev(Key::Command('a'), false, true, true), false),
+            None
+        );
+    }
+
+    #[test]
+    fn mac_cmd_arrows_should_move_to_the_line_ends_as_in_terminal_app() {
+        let control = |key| {
+            terminal_key(&ev(key, false, true, false)).map(|(k, m)| (k, m.control, m.alt, m.shift))
+        };
+        assert_eq!(
+            control(Key::Left),
+            Some((TermKey::Text("a".into()), true, false, false))
+        );
+        assert_eq!(
+            control(Key::Right),
+            Some((TermKey::Text("e".into()), true, false, false))
+        );
+        assert_eq!(
+            control(Key::Backspace),
+            Some((TermKey::Text("u".into()), true, false, false))
+        );
+    }
+
+    #[test]
+    fn linux_ctrl_left_should_stay_an_xterm_cursor_key() {
+        let (key, mods) = terminal_key(&ev(Key::Left, false, true, true)).expect("a terminal key");
+        assert_eq!(key, TermKey::Left);
+        assert!(mods.control);
     }
 
     #[test]

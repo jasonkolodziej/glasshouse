@@ -378,12 +378,15 @@ impl Session {
         let _ = self.engine.send_text(text);
     }
 
+    /// A key for the shell. Typing ends the selection, as in Alacritty and iTerm2.
     pub fn send_key(&self, key: &Key, mods: Modifiers) {
+        self.engine.clear_selection();
         let _ = self.engine.send_key(key, mods);
         self.engine.scroll_to_bottom();
     }
 
     pub fn paste(&self, text: &str) {
+        self.engine.clear_selection();
         let _ = self.engine.paste(text);
         self.engine.scroll_to_bottom();
     }

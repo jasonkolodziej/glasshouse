@@ -245,6 +245,36 @@ pub struct GridSnapshot {
     pub background: Rgba,
     /// Input-relevant modes.
     pub modes: TerminalModes,
+    /// The text selection, if any.
+    pub selection: Option<SelectionBounds>,
+}
+
+/// A text selection in absolute rows, both ends inclusive: it runs from `start` to the end of
+/// that row, through every row between, and from the start of `end`'s row to `end` (a single
+/// row selects `start.1..=end.1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionBounds {
+    /// (absolute row, column) of the first selected cell.
+    pub start: (usize, usize),
+    /// (absolute row, column) of the last selected cell.
+    pub end: (usize, usize),
+}
+
+impl SelectionBounds {
+    /// The selected columns of absolute `row` in a grid `columns` wide, end exclusive.
+    pub fn columns_in(&self, row: usize, columns: usize) -> Option<Range<usize>> {
+        if row < self.start.0 || row > self.end.0 || columns == 0 {
+            return None;
+        }
+        let from = if row == self.start.0 { self.start.1 } else { 0 };
+        let to = if row == self.end.0 {
+            self.end.1 + 1
+        } else {
+            columns
+        };
+        let to = to.min(columns);
+        (from < to).then_some(from..to)
+    }
 }
 
 pub(crate) fn absolute_row<T>(term: &Term<T>, line: Line) -> usize {
@@ -323,7 +353,16 @@ pub(crate) fn build<T>(
         foreground: palette.index(NamedColor::Foreground as usize),
         background: palette.index(NamedColor::Background as usize),
         modes: TerminalModes::from_term(mode),
+        selection: selection_bounds(term),
     }
+}
+
+fn selection_bounds<T>(term: &Term<T>) -> Option<SelectionBounds> {
+    let range = term.selection.as_ref()?.to_range(term)?;
+    Some(SelectionBounds {
+        start: (absolute_row(term, range.start.line), range.start.column.0),
+        end: (absolute_row(term, range.end.line), range.end.column.0),
+    })
 }
 
 /// Plain text of absolute rows `[from, to)`.

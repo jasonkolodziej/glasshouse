@@ -14,9 +14,9 @@ use terminal_core::{CellFlags, GridLine, TerminalAppearance, TerminalCursorShape
 use design_system::TrustState;
 
 use super::{Ink, UI, color, overlays, style};
-use rune::{Cursor, Drag};
+use rune::{Cursor, Drag, PointerPress};
 
-use crate::app::{App, CellSize, DIVIDER};
+use crate::app::{App, CellSize, DIVIDER, TerminalMenu};
 use crate::panes::{Axis, DropTarget, Edge, PaneTree};
 use crate::session::Session;
 use crate::shortcuts::{self, Shortcut};
@@ -201,7 +201,7 @@ fn pane(app: &App, session: &Session, focused: bool, ink: &Ink) -> El {
     let id = session.id;
     let split = app.is_split();
 
-    let mut area = el()
+    let area = el()
         .key("grid-area")
         .grow(1.0)
         .min_w(0.0)
@@ -211,11 +211,21 @@ fn pane(app: &App, session: &Session, focused: bool, ink: &Ink) -> El {
         .on_layout(move |s: &mut App, r: [f32; 4]| s.set_pane_size(id, r[2], r[3]))
         // Scrollback, or the program's own scrolling on the alternate screen.
         .on_wheel(move |s: &mut App, ev: WheelEvent, _| s.on_wheel(id, ev))
+        // Selecting text; a press also gives a split pane the keyboard.
+        .hit()
+        .cursor(Cursor::Text)
+        .on_drag(move |s: &mut App, drag: &mut Drag, tx| {
+            s.on_grid_drag(id, drag, tx.mods().shift);
+        })
+        .on_secondary_press(move |s: &mut App, p: PointerPress, _| {
+            s.select(id);
+            s.terminal_menu = Some(TerminalMenu {
+                tab: id,
+                x: p.x,
+                y: p.y,
+            });
+        })
         .child(screen(app, session, cell, focused, ink));
-    if split {
-        // Clicking a pane gives it the keyboard.
-        area = area.hit().on_press(move |s: &mut App| s.select(id));
-    }
 
     let mut pane = col()
         .key(format!("pane-{id}"))
@@ -572,10 +582,18 @@ fn screen(app: &App, session: &Session, cell: CellSize, focused: bool, ink: &Ink
         .map(|f| f.text.to_lowercase())
         .filter(|q| !q.is_empty());
     let highlight = ink.orange.alpha(0.42);
+    // The theme's selection colour, else the accent, translucent so the text reads through.
+    let selected = a.selection.map_or(ink.accent.alpha(0.38), color);
     let rows: Vec<Rc<GridRow>> = snap
         .lines
         .iter()
-        .map(|line| Rc::new(grid_row(line, style, find.as_deref(), highlight)))
+        .map(|line| {
+            let selection = snap
+                .selection
+                .and_then(|b| b.columns_in(line.row, snap.columns))
+                .map(|cols| (cols, selected));
+            Rc::new(grid_row(line, style, find.as_deref(), highlight, selection))
+        })
         .collect();
     let cols = u16::try_from(snap.columns).unwrap_or(u16::MAX);
     let (pad_x, pad_y) = (a.padding_horizontal, a.padding_vertical);
@@ -648,7 +666,13 @@ fn screen(app: &App, session: &Session, cell: CellSize, focused: bool, ink: &Ink
 
 /// A grid line as Rune's row: narrow characters in the shaped line, wide and non-ASCII
 /// glyphs pinned to their columns, and non-default backgrounds as fills.
-fn grid_row(line: &GridLine, style: TextStyle, find: Option<&str>, highlight: Color) -> GridRow {
+fn grid_row(
+    line: &GridLine,
+    style: TextStyle,
+    find: Option<&str>,
+    highlight: Color,
+    selection: Option<(std::ops::Range<usize>, Color)>,
+) -> GridRow {
     let mut content = String::with_capacity(line.cells.len());
     let mut spans: Vec<Span> = Vec::new();
     let mut pinned = Vec::new();
@@ -747,6 +771,11 @@ fn grid_row(line: &GridLine, style: TextStyle, find: Option<&str>, highlight: Co
                 i += 1;
             }
         }
+    }
+    // Over the cell backgrounds and find matches, so the selection always shows.
+    if let Some((cols, c)) = selection {
+        let at = |col: usize| u16::try_from(col).unwrap_or(u16::MAX);
+        fills.push((at(cols.start), at(cols.end), c));
     }
     for (start, end, c) in fills {
         row = row.fill(start, end, c);

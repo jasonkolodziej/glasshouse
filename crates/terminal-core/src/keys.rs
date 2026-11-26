@@ -47,6 +47,13 @@ pub struct Modifiers {
 }
 
 impl Modifiers {
+    /// Alt / Option alone.
+    pub const ALT: Self = Self {
+        shift: false,
+        control: false,
+        alt: true,
+    };
+
     /// xterm modifier parameter: 1 + shift + 2·alt + 4·ctrl.
     fn xterm_param(self) -> u8 {
         1 + u8::from(self.shift) + 2 * u8::from(self.alt) + 4 * u8::from(self.control)
@@ -87,6 +94,11 @@ pub fn encode_key(key: &Key, mods: Modifiers, app_cursor: bool) -> Vec<u8> {
         Key::Escape => alt_prefixed(&[ESC]),
         Key::Up => cursor_key(b'A', mods, app_cursor),
         Key::Down => cursor_key(b'B', mods, app_cursor),
+        // Option/Alt alone moves by word as Terminal.app and iTerm2 do: `ESC f` / `ESC b`
+        // are forward-word / backward-word in zsh, bash and fish by default, where the xterm
+        // form `ESC[1;3C` is unbound in zsh and types ";3C".
+        Key::Right if mods == Modifiers::ALT => vec![ESC, b'f'],
+        Key::Left if mods == Modifiers::ALT => vec![ESC, b'b'],
         Key::Right => cursor_key(b'C', mods, app_cursor),
         Key::Left => cursor_key(b'D', mods, app_cursor),
         Key::Home => cursor_key(b'H', mods, app_cursor),
@@ -289,7 +301,15 @@ mod tests {
         assert_eq!(encode_key(&Key::Home, NONE, false), b"\x1b[H");
         assert_eq!(encode_key(&Key::End, NONE, true), b"\x1bOF");
         assert_eq!(encode_key(&Key::Right, CTRL, true), b"\x1b[1;5C");
-        assert_eq!(encode_key(&Key::Left, ALT, false), b"\x1b[1;3D");
+        assert_eq!(encode_key(&Key::Up, ALT, false), b"\x1b[1;3A");
+    }
+
+    #[test]
+    fn alt_arrows_move_by_word_like_terminal_app() {
+        assert_eq!(encode_key(&Key::Left, ALT, false), b"\x1bb");
+        assert_eq!(encode_key(&Key::Right, ALT, true), b"\x1bf");
+        let shift_alt = Modifiers { shift: true, ..ALT };
+        assert_eq!(encode_key(&Key::Left, shift_alt, false), b"\x1b[1;4D");
     }
 
     #[test]
