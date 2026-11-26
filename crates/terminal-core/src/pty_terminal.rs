@@ -9,6 +9,8 @@ use std::time::Instant;
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::Config;
 use alacritty_terminal::vte::ansi::{self, CursorShape, CursorStyle, Rgb};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -19,6 +21,18 @@ use crate::{
     EngineError, EngineEvent, GridSize, GridSnapshot, Key, Modifiers, TerminalAppearance,
     TerminalCursorShape, TerminalEngine, Waker, encode_key, encode_mouse_wheel, encode_paste,
 };
+
+/// How a selection grows as the pointer drags: by cell, by word (a double click) or by line
+/// (a triple click).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionKind {
+    /// Cell by cell, from a single click.
+    Cells,
+    /// Whole words, from a double click.
+    Words,
+    /// Whole lines, from a triple click.
+    Lines,
+}
 
 /// Construction options for [`PtyTerminal`].
 #[derive(Debug, Clone, PartialEq)]
@@ -288,6 +302,66 @@ impl PtyTerminal {
         state.process(bytes);
     }
 
+    /// Starts a selection at absolute `row`, `col`. `right_half` says the press landed in the
+    /// right half of the cell, so a drag back over it leaves the cell out, as in other terminals.
+    pub fn begin_selection(&self, kind: SelectionKind, row: usize, col: usize, right_half: bool) {
+        let mut term = self.term();
+        let Some(point) = point_at(&term, row, col) else {
+            return;
+        };
+        let ty = match kind {
+            SelectionKind::Cells => SelectionType::Simple,
+            SelectionKind::Words => SelectionType::Semantic,
+            SelectionKind::Lines => SelectionType::Lines,
+        };
+        term.selection = Some(Selection::new(ty, point, side(right_half)));
+    }
+
+    /// Moves the selection's free end to absolute `row`, `col` (a drag, or Shift-click). Without
+    /// a selection, starts one there.
+    pub fn extend_selection(&self, row: usize, col: usize, right_half: bool) {
+        let mut term = self.term();
+        let Some(point) = point_at(&term, row, col) else {
+            return;
+        };
+        match term.selection.as_mut() {
+            Some(selection) => selection.update(point, side(right_half)),
+            None => {
+                term.selection = Some(Selection::new(
+                    SelectionType::Simple,
+                    point,
+                    side(right_half),
+                ));
+            }
+        }
+    }
+
+    /// Selects every line, scrollback included.
+    pub fn select_all(&self) {
+        let mut term = self.term();
+        let last = term.grid().total_lines().saturating_sub(1);
+        let (Some(first), Some(end)) = (point_at(&term, 0, 0), point_at(&term, last, 0)) else {
+            return;
+        };
+        let mut selection = Selection::new(SelectionType::Lines, first, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+    }
+
+    /// Drops the selection.
+    pub fn clear_selection(&self) {
+        self.term().selection = None;
+    }
+
+    /// The selected text, `None` without a selection or when it covers nothing.
+    pub fn selection_text(&self) -> Option<String> {
+        let term = self.term();
+        if term.selection.as_ref().is_none_or(Selection::is_empty) {
+            return None;
+        }
+        term.selection_to_string().filter(|t| !t.is_empty())
+    }
+
     /// Returns to the live screen.
     pub fn scroll_to_bottom(&self) {
         self.term().scroll_display(Scroll::Bottom);
@@ -351,6 +425,17 @@ impl PtyTerminal {
         });
         Ok(())
     }
+}
+
+fn side(right_half: bool) -> Side {
+    if right_half { Side::Right } else { Side::Left }
+}
+
+/// The grid point of absolute `row`, `col`, clamped onto the grid's columns.
+fn point_at<T>(term: &Term<T>, row: usize, col: usize) -> Option<Point> {
+    let line = snapshot::grid_line(term, row)?;
+    let last = term.grid().columns().saturating_sub(1);
+    Some(Point::new(line, Column(col.min(last))))
 }
 
 impl TerminalEngine for PtyTerminal {

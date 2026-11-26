@@ -280,6 +280,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     if app.showcase {
         window = window.child(traffic_lights());
     }
+    window = window.children(overlays::terminal_menu(app, &ink));
     if app.palette.is_some() {
         window = window.child(overlays::dim("palette-dim", &ink, |s: &mut App, tx| {
             s.close_palette(tx)

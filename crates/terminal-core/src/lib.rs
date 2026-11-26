@@ -19,7 +19,8 @@ pub use engine::{EngineError, EngineEvent, GridSize, TerminalEngine, Waker};
 pub use environment::{PtyEnvironment, PtyEnvironmentOptions};
 pub use keys::{Key, Modifiers, encode_key, encode_mouse_wheel, encode_paste};
 pub use password::{PasswordPromptDetector, PasswordPromptState};
-pub use pty_terminal::{PtyTerminal, PtyTerminalOptions};
+pub use pty_terminal::{PtyTerminal, PtyTerminalOptions, SelectionKind};
 pub use snapshot::{
-    CellFlags, CellSpan, CursorSnapshot, GridCell, GridLine, GridSnapshot, TerminalModes,
+    CellFlags, CellSpan, CursorSnapshot, GridCell, GridLine, GridSnapshot, SelectionBounds,
+    TerminalModes,
 };

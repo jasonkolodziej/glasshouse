@@ -543,6 +543,84 @@ mod tests {
         assert!(rt.state.split.is_none());
     }
 
+    /// The window point at the middle of cell (`col`, `row`) of the selected tab's grid.
+    fn cell_point(rt: &Runtime<App>, col: usize, row: usize) -> (f32, f32) {
+        let grid = rect(rt, "grid");
+        let cell = rt.state.cell.expect("a measured cell");
+        (
+            grid[0] + (col as f32 + 0.5) * cell.width,
+            grid[1] + (row as f32 + 0.5) * cell.height,
+        )
+    }
+
+    fn selection(rt: &Runtime<App>) -> Option<String> {
+        rt.state
+            .selected()
+            .and_then(|s| s.engine().selection_text())
+    }
+
+    #[test]
+    fn dragging_over_the_grid_should_select_and_highlight_text() {
+        let mut rt = scene("terminal");
+        assert_eq!(selection(&rt), None);
+        let (from, to) = (cell_point(&rt, 0, 0), cell_point(&rt, 12, 1));
+        drag(&mut rt, from, to);
+        let text = selection(&rt).expect("a selection");
+        assert!(text.contains('\n') && !text.trim().is_empty(), "{text:?}");
+        let snap = rt.state.selected().expect("a tab").engine().snapshot();
+        assert!(
+            snap.selection.is_some(),
+            "the snapshot carries it to the view"
+        );
+    }
+
+    #[test]
+    fn a_double_click_should_select_a_word_and_typing_should_drop_it() {
+        let mut rt = scene("terminal");
+        // The first row's text, to find a word on it.
+        let line = rt
+            .state
+            .selected()
+            .expect("a tab")
+            .engine()
+            .snapshot()
+            .lines[0]
+            .text();
+        let col = line
+            .find(|c: char| c.is_alphanumeric())
+            .expect("a word on the first row");
+        let (x, y) = cell_point(&rt, col, 0);
+        for t in [2.0, 3.0] {
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(t / 60.0);
+        }
+        let word = selection(&rt).expect("a word");
+        assert!(!word.is_empty() && !word.contains(' '), "{word:?}");
+        // What `App::on_key` does with a typed key (the test runtime has no app key hook).
+        rt.state.selected().expect("a tab").send_key(
+            &terminal_core::Key::Text("x".into()),
+            terminal_core::Modifiers::default(),
+        );
+        assert_eq!(selection(&rt), None);
+    }
+
+    #[test]
+    fn the_right_click_menu_should_select_all_and_close() {
+        let mut rt = scene("terminal");
+        let (x, y) = cell_point(&rt, 3, 2);
+        rt.secondary_down(x, y);
+        rt.secondary_up(x, y);
+        rt.frame(2.0 / 60.0);
+        assert!(rt.state.terminal_menu.is_some());
+        let (x, y) = rt.find("terminal-menu-select-all").expect("Select All");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(3.0 / 60.0);
+        assert!(rt.state.terminal_menu.is_none());
+        assert!(selection(&rt).is_some_and(|t| t.lines().count() > 1));
+    }
+
     fn rect(rt: &Runtime<App>, key: &str) -> [f32; 4] {
         rt.presented(key).expect(key).0
     }

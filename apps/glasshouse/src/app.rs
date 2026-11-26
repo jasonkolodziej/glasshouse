@@ -12,7 +12,7 @@ use ssh_config::{
     ManagedSshConfig, ManagedSshHost, SshConfigConflict, SshConfigStore, SshIncludeStatus,
     SshKeyFile, glasshouse_ssh_scripts,
 };
-use terminal_core::{GridSize, Modifiers, TerminalAppearance, TerminalEngine};
+use terminal_core::{GridSize, Modifiers, SelectionKind, TerminalAppearance, TerminalEngine};
 
 use crate::appearance::{Accessibility, ThemeLibrary, terminal_appearance};
 use crate::hosts::{self, SshHost};
@@ -253,6 +253,14 @@ impl SettingsState {
     }
 }
 
+/// Where the right-click menu over a pane opened.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerminalMenu {
+    pub tab: u64,
+    pub x: f32,
+    pub y: f32,
+}
+
 pub struct App {
     pub sessions: Vec<Session>,
     pub selected: Option<u64>,
@@ -284,6 +292,8 @@ pub struct App {
     pub blink_on: bool,
     /// Wheel travel not yet worth a whole line, in lines (trackpads send fractions).
     wheel_rest: f32,
+    /// The right-click menu over a pane: its tab, and where it opened in window points.
+    pub terminal_menu: Option<TerminalMenu>,
     pub secure_always: bool,
     /// The window's size in points, from layout (the wallpaper places its light by it).
     pub window: (f32, f32),
@@ -338,6 +348,7 @@ impl App {
             hovered_tick: None,
             blink_on: true,
             wheel_rest: 0.0,
+            terminal_menu: None,
             secure_always: false,
             window: (0.0, 0.0),
             showcase: false,
@@ -940,6 +951,10 @@ impl App {
 
     /// Every key while nothing has focus: app shortcuts first, the rest to the shell.
     pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if self.terminal_menu.is_some() && ev.key == rune::Key::Escape {
+            self.terminal_menu = None;
+            return true;
+        }
         if let Some(shortcut) = shortcuts::shortcut(ev) {
             self.run_shortcut(shortcut, tx);
             return true;
@@ -994,7 +1009,59 @@ impl App {
         true
     }
 
+    /// A press or drag over tab `id`'s grid area, at the drag's (`x`, `y`) in its own points:
+    /// a click starts a selection, a double click selects a word and a triple click a line, and
+    /// dragging extends it by the same unit. Shift-click extends the selection there is.
+    pub fn on_grid_drag(&mut self, id: u64, drag: &Drag, shift: bool) {
+        let Some(index) = self.sessions.iter().position(|s| s.id == id) else {
+            return;
+        };
+        if drag.phase == Phase::Down {
+            self.terminal_menu = None;
+            self.select(id);
+        }
+        let cell = self
+            .cell
+            .unwrap_or_else(|| crate::ui::grid::measure_cell(&self.sessions[index].appearance));
+        let session = &self.sessions[index];
+        let a = &session.appearance;
+        let size = session.engine().size();
+        let x = drag.x - a.padding_horizontal;
+        let col = cell_index(x, cell.width, size.cols);
+        let right_half = x > (col as f32 + 0.5) * cell.width;
+        let row = session.engine().top_visible_row()
+            + cell_index(drag.y - a.padding_vertical, cell.height, size.rows);
+        let engine = session.engine();
+        match drag.phase {
+            Phase::Down if shift => engine.extend_selection(row, col, right_half),
+            Phase::Down => {
+                let kind = match drag.clicks {
+                    0 | 1 => SelectionKind::Cells,
+                    2 => SelectionKind::Words,
+                    _ => SelectionKind::Lines,
+                };
+                engine.begin_selection(kind, row, col, right_half);
+            }
+            Phase::Move => engine.extend_selection(row, col, right_half),
+            Phase::Up => {}
+        }
+    }
+
+    /// Copy: the selection, or with none the visible screen.
+    pub fn copy(&mut self, tx: &mut Tx) {
+        let Some(s) = self.selected() else {
+            return;
+        };
+        let text = s.engine().selection_text().unwrap_or_else(|| {
+            let top = s.engine().top_visible_row();
+            let rows = s.engine().size().rows as usize;
+            TerminalEngine::text(s.engine(), top, top + rows)
+        });
+        tx.copy(text);
+    }
+
     pub fn run_shortcut(&mut self, shortcut: Shortcut, tx: &mut Tx) {
+        self.terminal_menu = None;
         match shortcut {
             Shortcut::NewTab => self.new_tab(),
             Shortcut::CloseTab => {
@@ -1020,18 +1087,8 @@ impl App {
             }
             Shortcut::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             Shortcut::Settings => self.open_settings(SettingsPane::Security),
-            Shortcut::Copy => {
-                // Without a selection model, Copy takes the visible screen's text.
-                if let Some(s) = self.selected() {
-                    let top = s.engine().top_visible_row();
-                    let rows = s.engine().size().rows as usize;
-                    tx.copy(terminal_core::TerminalEngine::text(
-                        s.engine(),
-                        top,
-                        top + rows,
-                    ));
-                }
-            }
+            Shortcut::Copy => self.copy(tx),
+            Shortcut::SelectAll => self.with_selected(|s| s.engine().select_all()),
             Shortcut::Paste => tx.read_clipboard(|app: &mut App, content, _| {
                 if let Some(s) = app.selected() {
                     s.paste(content.text());

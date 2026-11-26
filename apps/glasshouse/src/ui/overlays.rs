@@ -8,6 +8,7 @@ use super::{Ink, UI, hrule, style, titled};
 use crate::app::App;
 use crate::palette::PaletteItem;
 use crate::session::{ApprovalContext, ApprovalPhase, ApprovalSource};
+use crate::shortcuts::{self, Shortcut};
 
 /// Dims everything behind a modal overlay; pressing it dismisses the overlay.
 pub fn dim(key: &str, ink: &Ink, dismiss: fn(&mut App, &mut Tx)) -> El {
@@ -374,4 +375,85 @@ pub fn find_bar(app: &App, ink: &Ink) -> El {
             })
             .child(text("esc").font(style(11.0, 600.0)).color(ink.tertiary)),
     )
+}
+
+const MENU_WIDTH: f32 = 220.0;
+const MENU_ROW: f32 = 26.0;
+
+/// The right-click menu over a pane: Copy, Paste, Select All and Clear, with their shortcuts.
+/// Pressing anywhere else closes it.
+pub fn terminal_menu(app: &App, ink: &Ink) -> Vec<El> {
+    let Some(menu) = app.terminal_menu else {
+        return Vec::new();
+    };
+    let has_selection = app
+        .sessions
+        .iter()
+        .find(|s| s.id == menu.tab)
+        .is_some_and(|s| s.engine().selection_text().is_some());
+    let items = [
+        (
+            Shortcut::Copy,
+            if has_selection { "Copy" } else { "Copy Screen" },
+        ),
+        (Shortcut::Paste, "Paste"),
+        (Shortcut::SelectAll, "Select All"),
+        (Shortcut::Clear, "Clear"),
+    ];
+    let height = MENU_ROW * items.len() as f32 + 10.0;
+    // Kept inside the window, flipping left or up at its far edges as system menus do.
+    let (w, h) = app.window;
+    let x = if menu.x + MENU_WIDTH > w && menu.x > MENU_WIDTH {
+        menu.x - MENU_WIDTH
+    } else {
+        menu.x
+    };
+    let y = if menu.y + height > h && menu.y > height {
+        menu.y - height
+    } else {
+        menu.y
+    };
+    let rows = items.into_iter().map(|(shortcut, title)| {
+        row()
+            .key(format!(
+                "terminal-menu-{}",
+                title.to_lowercase().replace(' ', "-")
+            ))
+            .role("menuitem")
+            .label(title)
+            .hit()
+            .w_full()
+            .h(MENU_ROW)
+            .px(10.0)
+            .center_y()
+            .hover(ink.selected)
+            .on_press_tx(move |s: &mut App, tx| s.run_shortcut(shortcut, tx))
+            .child(text(title).font(style(UI, 500.0)).color(ink.text))
+            .child(el().grow(1.0))
+            .child(
+                text(shortcuts::label(shortcut))
+                    .font(style(11.5, 600.0))
+                    .color(ink.tertiary),
+            )
+    });
+    let card = super::panel(
+        col()
+            .key("terminal-menu")
+            .role("menu")
+            .absolute(x, y)
+            .w(MENU_WIDTH)
+            .py(5.0)
+            .children(rows),
+        ink,
+        ink.bg,
+    )
+    .shadow(10.0, 28.0, ink.shadow);
+    let dismiss = el()
+        .key("terminal-menu-dismiss")
+        .absolute(0.0, 0.0)
+        .w_full()
+        .h_full()
+        .hit()
+        .on_press(|s: &mut App| s.terminal_menu = None);
+    vec![dismiss, card]
 }
