@@ -813,7 +813,7 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "design-system"
-version = "0.1.3"
+version = "0.1.5"
 
 [[package]]
 name = "digest"
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "glasshouse"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "design-system",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "glasshouse-agent"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "libc",
@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "glasshouse-security"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "libc",
  "tempfile",
@@ -3312,7 +3312,7 @@ dependencies = [
 
 [[package]]
 name = "shell-integration"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "libc",
  "tempfile",
@@ -3504,7 +3504,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-agent-core"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "base64 0.22.1",
  "glasshouse-security",
@@ -3520,7 +3520,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-config"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -3730,7 +3730,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-core"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "alacritty_terminal",
  "design-system",
@@ -3743,7 +3743,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-theme"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "plist",
  "serde_yaml_ng",
